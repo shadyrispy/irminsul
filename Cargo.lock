@@ -2268,6 +2268,7 @@ version = "0.1.17"
 dependencies = [
  "anime-game-data",
  "anyhow",
+ "async-trait",
  "async-watcher",
  "auto-artifactarium",
  "base64",
