@@ -69,6 +69,9 @@ windows = { version = "0.61.3", features = [
 	"Win32_UI_Shell",
 ] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.177"
+
 [build-dependencies]
 # Keep these in sync with dependencies above
 anime-game-data = { git = "https://github.com/konkers/anime-game-data", rev = "222bab5d8f3f7c5052360672a9d882e766e70062" }
