@@ -63,17 +63,14 @@ pub fn create_capture(backend: BackendType) -> Result<Box<dyn CaptureBackend>> {
         #[cfg(windows)]
         BackendType::Pktmon => Ok(Box::new(pktmon_backend::PktmonBackend::new()?)),
 
-        BackendType::Pcap => {
-            if cfg!(feature = "pcap") {
-                Ok(Box::new(pcap_backend::PcapBackend::new()?))
-            } else {
-                Err(CaptureError::Capture {
-                    has_captured: false,
-                    error: anyhow::anyhow!(
-                        "Please enable the pcap feature during build to use the pcap backend",
-                    ),
-                })
-            }
-        }
+        #[cfg(feature = "pcap")]
+        BackendType::Pcap => Ok(Box::new(pcap_backend::PcapBackend::new()?)),
+        #[cfg(not(feature = "pcap"))]
+        BackendType::Pcap => Err(CaptureError::Capture {
+            has_captured: false,
+            error: anyhow::anyhow!(
+                "Please enable the pcap feature during build to use the pcap backend",
+            ),
+        }),
     }
 }
