@@ -1,4 +1,3 @@
-[submodule "auto-artifactarium"]
-	path = auto-artifactarium
+[submodule "rustlib/auto-artifactarium"]
+	path = rustlib/auto-artifactarium
 	url = https://github.com/konkers/auto-artifactarium.git
-	branch = main
