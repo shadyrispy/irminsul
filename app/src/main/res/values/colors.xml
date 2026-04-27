@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 主题色 -->
+    <color name="purple_500">#4A90E2</color>
+    <color name="purple_700">#357ABD</color>
+    <color name="teal_200">#F5A623</color>
+    
+    <!-- 原神风格配色 -->
+    <color name="primary_blue">#4A90E2</color>
+    <color name="secondary_gold">#F5A623</color>
+    <color name="background_dark">#1A1A2E</color>
+    <color name="surface_dark">#2A2A45</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#B0B0B0</color>
+</resources>

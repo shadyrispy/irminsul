@@ -2,33 +2,21 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 网络权限 -->
+    <!-- VPN权限：用于流量捕获 -->
+    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    
-    <!-- VPN 权限 (必需，用于流量捕获) -->
-    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
-    
-    <!-- 存储权限 (用于导出文件) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-    
-    <!-- 前台服务权限 -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    
-    <!-- 查询其他应用 -->
-    <queries>
-        <package android:name="com.miHoYo.Yuanshen" />
-        <package android:name="com.miHoYo.GenshinImpact" />
-        <package android:name="com.miHoYo.hk4eclient" />
-    </queries>
 
     <application
-        android:allowBackup="true"
+        android:name=".IrminsulApplication"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -37,10 +25,10 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Irminsul"
         tools:targetApi="31">
-        
-        <!-- 主 Activity -->
+
+        <!-- 主Activity -->
         <activity
-            android:name=".MainActivity"
+            android:name=".presentation.ui.main.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.Irminsul">
             <intent-filter>
@@ -49,11 +37,25 @@
             </intent-filter>
         </activity>
 
-        <!-- 捕获服务 -->
+        <!-- VPN捕获服务 -->
         <service
-            android:name=".CaptureService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:name=".service.GenshinCaptureService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGSERVICE"
+                android:value="Capturing Genshin Impact network traffic" />
+        </service>
+
+        <!-- 数据导出Activity -->
+        <activity
+            android:name=".presentation.ui.export.ExportActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Irminsul" />
 
     </application>
 

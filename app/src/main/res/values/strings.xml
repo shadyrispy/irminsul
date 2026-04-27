@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Irminsul</string>
+    
+    <!-- 主界面 -->
+    <string name="main_title">Irminsul</string>
+    <string name="capture_status_ready">准备就绪</string>
+    <string name="capture_status_capturing">正在捕获...</string>
+    <string name="capture_status_stopped">已停止</string>
+    
+    <!-- 按钮 -->
+    <string name="btn_start_capture">开始捕获</string>
+    <string name="btn_stop_capture">停止捕获</string>
+    <string name="btn_export">导出数据</string>
+    <string name="btn_settings">设置</string>
+    
+    <!-- 数据类别 -->
+    <string name="label_characters">角色</string>
+    <string name="label_artifacts">圣遗物</string>
+    <string name="label_weapons">武器</string>
+    <string name="label_materials">材料</string>
+    
+    <!-- 导出 -->
+    <string name="export_title">导出数据</string>
+    <string name="export_format_good">GOOD格式</string>
+    <string name="export_method_clipboard">复制到剪贴板</string>
+    <string name="export_method_file">保存为文件</string>
+    <string name="export_success">导出成功</string>
+    <string name="export_failed">导出失败</string>
+    
+    <!-- 权限 -->
+    <string name="permission_vpn_required">需要VPN权限来捕获流量</string>
+    <string name="permission_storage_required">需要存储权限来保存文件</string>
+    
+    <!-- 错误 -->
+    <string name="error_no_data">没有可导出的数据</string>
+    <string name="error_capture_failed">捕获失败</string>
+    <string name="error_parse_failed">数据解析失败</string>
+</resources>
