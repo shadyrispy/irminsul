@@ -15,7 +15,7 @@ use flate2::read::GzDecoder;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::capture::{BackendType, create_capture};
+use crate::capture::{BackendType, create_capture, create_file_capture};
 use crate::player_data::PlayerData;
 use crate::{APP_ID, AppState, DataUpdated, Message, State};
 
@@ -106,7 +106,6 @@ impl Monitor {
                     tracing::warn!("Capture start request with an existing cancel token");
                 }
 
-                // Spawn capture task.
                 let cancel_token = CancellationToken::new();
                 tokio::spawn(capture_task(
                     cancel_token.clone(),
@@ -123,6 +122,20 @@ impl Monitor {
                 };
                 cancel_token.cancel();
                 self.app_state.update_capturing_state(false);
+            }
+            Message::OpenPcapFile(file_path) => {
+                if self.capture_cancel_token.is_some() {
+                    tracing::warn!("Pcap file open request with an existing cancel token");
+                }
+
+                let cancel_token = CancellationToken::new();
+                tokio::spawn(file_capture_task(
+                    cancel_token.clone(),
+                    self.packet_tx.clone(),
+                    file_path,
+                ));
+                self.capture_cancel_token = Some(cancel_token);
+                self.app_state.update_capturing_state(true);
             }
             Message::ExportGenshinOptimizer(settings, reply_tx) => {
                 let _ = reply_tx.send(self.player_data.export_genshin_optimizer(&settings));
@@ -215,6 +228,39 @@ async fn capture_task(
         }
     }
     tracing::info!("ending capture");
+    Ok(())
+}
+
+async fn file_capture_task(
+    cancel_token: CancellationToken,
+    packet_tx: mpsc::UnboundedSender<Vec<u8>>,
+    file_path: String,
+) -> Result<()> {
+    let mut capture = create_file_capture(&file_path)
+        .map_err(|e| anyhow!("Error opening pcap file {}: {e}", file_path))?;
+    tracing::info!("starting pcap file processing: {}", file_path);
+    loop {
+        let packet = tokio::select!(
+            packet = capture.next_packet() => packet,
+            _ = cancel_token.cancelled() => break,
+        );
+        match packet {
+            Ok(packet) => {
+                if let Err(e) = packet_tx.send(packet) {
+                    tracing::error!("Error sending packet to monitor: {e}");
+                }
+            }
+            Err(crate::capture::CaptureError::CaptureClosed) => {
+                tracing::info!("pcap file processing completed");
+                break;
+            }
+            Err(e) => {
+                tracing::error!("Error reading packet: {e}");
+                break;
+            }
+        }
+    }
+    tracing::info!("ending pcap file processing");
     Ok(())
 }
 

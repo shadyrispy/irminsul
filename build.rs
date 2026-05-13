@@ -13,12 +13,28 @@ async fn main() -> io::Result<()> {
     let cache_path = Path::new(&out_dir).join("game_data.json");
 
     let mut db = anime_game_data::AnimeGameData::new_with_cache(&cache_path);
-    if db.needs_update().await.unwrap() {
-        db.update().await.unwrap();
-        let out_path = Path::new(&out_dir).join("game_data.gz");
-        let f = File::create(out_path).unwrap();
-        let writer = GzEncoder::new(f, Compression::best());
-        db.save_to_writer(writer).unwrap();
+    match db.needs_update().await {
+        Ok(true) => {
+            match db.update().await {
+                Ok(_) => {
+                    let out_path = Path::new(&out_dir).join("game_data.gz");
+                    let f = File::create(out_path).unwrap();
+                    let writer = GzEncoder::new(f, Compression::best());
+                    db.save_to_writer(writer).unwrap();
+                }
+                Err(e) => {
+                    eprintln!("Failed to update game data: {}", e);
+                    eprintln!("Using cached data instead");
+                }
+            }
+        }
+        Ok(false) => {
+            eprintln!("Game data is up to date");
+        }
+        Err(e) => {
+            eprintln!("Failed to check for updates: {}", e);
+            eprintln!("Using cached data instead");
+        }
     }
 
     // Add icon to windows binary.

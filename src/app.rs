@@ -80,6 +80,7 @@ pub struct IrminsulApp {
     bug_report_open: bool,
 
     capture_settings_open: bool,
+    pcap_file_dialog: Option<FileDialog>,
 
     optimizer_settings_open: bool,
     optimizer_export_rx: Option<oneshot::Receiver<Result<String>>>,
@@ -213,6 +214,7 @@ impl IrminsulApp {
             power_tools_open: false,
             bug_report_open: false,
             capture_settings_open: false,
+            pcap_file_dialog: None,
             optimizer_settings_open: false,
             optimizer_export_rx: None,
             optimizer_save_dialog: None,
@@ -241,6 +243,9 @@ impl eframe::App for IrminsulApp {
         self.toasts.show(ctx);
         if let Some(optimizer_save_dialog) = &mut self.optimizer_save_dialog {
             optimizer_save_dialog.update(ctx);
+        }
+        if let Some(pcap_file_dialog) = &mut self.pcap_file_dialog {
+            pcap_file_dialog.update(ctx);
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -508,11 +513,32 @@ impl IrminsulApp {
                         if ui.button(egui_material_icons::icons::ICON_PAUSE).clicked() {
                             let _ = self.ui_message_tx.send(Message::StopCapture);
                         }
-                    } else if ui
-                        .button(egui_material_icons::icons::ICON_PLAY_ARROW)
-                        .clicked()
-                    {
-                        let _ = self.ui_message_tx.send(Message::StartCapture);
+                    } else {
+                        if ui
+                            .button(egui_material_icons::icons::ICON_PLAY_ARROW)
+                            .clicked()
+                        {
+                            let _ = self.ui_message_tx.send(Message::StartCapture);
+                        }
+
+                        if ui
+                            .button(egui_material_icons::icons::ICON_FOLDER_OPEN)
+                            .clicked()
+                        {
+                            let mut pcap_file_dialog = FileDialog::new()
+                                .add_file_filter_extensions("PCAP files", vec!["pcap", "pcapng"]);
+                            pcap_file_dialog.pick_file();
+                            self.pcap_file_dialog = Some(pcap_file_dialog);
+                        }
+
+                        if let Some(pcap_file_dialog) = &mut self.pcap_file_dialog {
+                            if let Some(path) = pcap_file_dialog.take_picked() {
+                                let _ = self.ui_message_tx.send(Message::OpenPcapFile(
+                                    path.to_string_lossy().to_string(),
+                                ));
+                                self.pcap_file_dialog = None;
+                            }
+                        }
                     }
                 },
             );

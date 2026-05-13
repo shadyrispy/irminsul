@@ -51,6 +51,7 @@ pub enum Message {
     DownloadAcknowledged,
     StartCapture,
     StopCapture,
+    OpenPcapFile(String),
     ExportGenshinOptimizer(ExportSettings, oneshot::Sender<Result<String>>),
 }
 

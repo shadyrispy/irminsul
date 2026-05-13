@@ -1,5 +1,7 @@
 #[cfg(feature = "pcap")]
 mod pcap_backend;
+#[cfg(feature = "pcap")]
+mod pcap_file_backend;
 #[cfg(windows)]
 mod pktmon_backend;
 
@@ -73,4 +75,9 @@ pub fn create_capture(backend: BackendType) -> Result<Box<dyn CaptureBackend>> {
             ),
         }),
     }
+}
+
+#[cfg(feature = "pcap")]
+pub fn create_file_capture(file_path: &str) -> Result<Box<dyn CaptureBackend>> {
+    Ok(Box::new(pcap_file_backend::PcapFileBackend::new(file_path)?))
 }
