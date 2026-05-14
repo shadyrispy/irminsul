@@ -20,20 +20,10 @@ use crate::monitor::Monitor;
 use crate::player_data::ExportSettings;
 use crate::update::check_for_app_update;
 use crate::{
-    AppState, ConfirmationType, Message, ReloadHandle, State, TracingLevel, capture, open_log_dir,
-    wish,
+    AppState, ConfirmationType, Message, ReloadHandle, State, TracingLevel,
+    capture, open_log_dir, wish,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AchievementFormat {
-    Uiaf,
-    Seelie,
-    Cocogoat,
-    SnapGenshin,
-    Xunkong,
-    TeyvatGuide,
-    Csv,
-}
+use crate::AchievementFormat;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SavedAppState {
@@ -1033,7 +1023,7 @@ impl IrminsulApp {
                                     self.achievement_request_export(AchievementExportTarget::File);
                                 }
 
-                                egui::ComboBox::from_id_source("achievement_format")
+                                egui::ComboBox::from_id_salt("achievement_format")
                                     .selected_text(format_name)
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(

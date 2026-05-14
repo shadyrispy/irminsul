@@ -12,8 +12,6 @@ use tracing_appender::rolling::Rotation;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, reload};
 
-use crate::player_data::ExportSettings;
-
 mod admin;
 mod app;
 mod capture;
@@ -24,7 +22,20 @@ mod uiaf;
 mod update;
 mod wish;
 
+use crate::player_data::ExportSettings;
+
 const APP_ID: &str = "Irminsul";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AchievementFormat {
+    Uiaf,
+    Seelie,
+    Cocogoat,
+    SnapGenshin,
+    Xunkong,
+    TeyvatGuide,
+    Csv,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum ConfirmationType {
@@ -44,8 +55,6 @@ pub enum State {
     Downloading,
     Main,
 }
-
-pub use app::AchievementFormat;
 
 #[derive(Debug)]
 pub enum Message {

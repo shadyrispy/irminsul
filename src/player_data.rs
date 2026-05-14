@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::good::{self, fake_uninitialized_4th_line};
 use crate::AchievementFormat;
-use crate::uiaf::{SeelieAchievement, SeelieRoot, UiafAchievement, UiafInfo, UiafRoot};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ExportSettings {
@@ -326,14 +325,16 @@ impl PlayerData {
     }
 
     pub fn export_achievements_uiaf(&self) -> Result<String> {
-        let list = self
+        use crate::uiaf::{UiafAchievement, UiafInfo, UiafRoot};
+
+        let achievement_list = self
             .achievements
             .iter()
-            .map(|a| UiafAchievement {
-                id: a.id,
+            .map(|achievement| UiafAchievement {
+                id: achievement.id,
                 current: 0,
-                status: a.status,
-                timestamp: a.finish_timestamp.unwrap_or(0),
+                status: achievement.status,
+                timestamp: achievement.finish_timestamp.unwrap_or(0),
             })
             .collect();
 
@@ -344,7 +345,7 @@ impl PlayerData {
                 uiaf_version: "v1.1".to_string(),
                 export_timestamp: Utc::now().timestamp(),
             },
-            list,
+            list: achievement_list,
         };
 
         let json = serde_json::to_string(&root)?;
@@ -353,31 +354,38 @@ impl PlayerData {
     }
 
     pub fn export_achievements_seelie(&self) -> Result<String> {
+        use crate::uiaf::{SeelieAchievement, SeelieRoot};
+
         let achievements = self
             .achievements
             .iter()
-            .filter(|a| a.status >= 2) // Finished or RewardTaken
-            .map(|a| (a.id, SeelieAchievement { done: true }))
+            .filter(|achievement| achievement.status >= 2)
+            .map(|achievement| (achievement.id, SeelieAchievement { done: true }))
             .collect();
 
         let root = SeelieRoot { achievements };
-
         let json = serde_json::to_string(&root)?;
         tracing::trace!("{json}");
         Ok(json)
     }
 
     pub fn export_achievements_csv(&self) -> Result<String> {
-        let mut csv = String::from("ID,Status,Current,Timestamp\n");
-        for a in &self.achievements {
-            csv.push_str(&format!(
-                "{},{},{},{}\n",
-                a.id,
-                a.status,
-                0, // current placeholder
-                a.finish_timestamp.unwrap_or(0)
-            ));
+        use std::fmt::Write;
+
+        let mut csv = String::new();
+        writeln!(csv, "ID,Status,Current,Timestamp")?;
+
+        for achievement in &self.achievements {
+            writeln!(
+                csv,
+                "{},{},{},{}",
+                achievement.id,
+                achievement.status,
+                0,
+                achievement.finish_timestamp.unwrap_or(0)
+            )?;
         }
+
         Ok(csv)
     }
 
