@@ -519,7 +519,7 @@ dependencies = [
 [[package]]
 name = "auto-artifactarium"
 version = "1.4.0"
-source = "git+https://github.com/konkers/auto-artifactarium?rev=fa768462e3dbe10294c9973b8a9ba7b8cbcdab8b#fa768462e3dbe10294c9973b8a9ba7b8cbcdab8b"
+source = "git+https://github.com/shadyrispy/auto-artifactarium?branch=feat%2Fheuristic-matching#77648b9bf066a4caf8ea92336db815b6f8f47f60"
 dependencies = [
  "anyhow",
  "base64",
