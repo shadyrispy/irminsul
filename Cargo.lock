@@ -150,7 +150,7 @@ dependencies = [
  "android-properties",
  "bitflags 2.11.1",
  "cc",
- "jni",
+ "jni 0.22.4",
  "libc",
  "log",
  "ndk",
@@ -178,12 +178,13 @@ dependencies = [
 [[package]]
 name = "anime-game-data"
 version = "0.1.0"
-source = "git+https://github.com/konkers/anime-game-data?rev=222bab5d8f3f7c5052360672a9d882e766e70062#222bab5d8f3f7c5052360672a9d882e766e70062"
+source = "git+https://github.com/shadyrispy/anime-game-data?branch=main#ef7cb8f9d8c0a8934b0100ac0fdec50c00989f97"
 dependencies = [
  "anyhow",
  "reqwest",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -721,6 +722,12 @@ dependencies = [
  "libc",
  "shlex",
 ]
+
+[[package]]
+name = "cesu8"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 
 [[package]]
 name = "cfg-if"
@@ -2317,6 +2324,7 @@ dependencies = [
  "futures",
  "futures-util",
  "indexmap",
+ "jni 0.21.1",
  "libc",
  "log",
  "notify",
@@ -2391,6 +2399,22 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "jni"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a87aa2bb7d2af34197c04845522473242e1aa17c12f4935d5856491a7fb8c97"
+dependencies = [
+ "cesu8",
+ "cfg-if",
+ "combine",
+ "jni-sys 0.3.1",
+ "log",
+ "thiserror 1.0.69",
+ "walkdir",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -5487,7 +5511,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fc95580916af1e68ff6a7be07446fc5db73ebf71cf092de939bbf5f7e189f72"
 dependencies = [
  "core-foundation 0.10.1",
- "jni",
+ "jni 0.22.4",
  "log",
  "ndk-context",
  "objc2 0.6.4",

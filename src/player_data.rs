@@ -32,6 +32,27 @@ pub struct ExportSettings {
     pub min_weapon_rarity: u32,
 }
 
+impl Default for ExportSettings {
+    fn default() -> Self {
+        Self {
+            include_characters: true,
+            include_artifacts: true,
+            include_weapons: true,
+            include_materials: true,
+            fake_initialize_4th_line: false,
+            min_character_level: 1,
+            min_character_ascension: 0,
+            min_character_constellation: 0,
+            min_artifact_level: 0,
+            min_artifact_rarity: 1,
+            min_weapon_level: 1,
+            min_weapon_refinement: 1,
+            min_weapon_ascension: 0,
+            min_weapon_rarity: 1,
+        }
+    }
+}
+
 pub struct PlayerData {
     game_data: AnimeGameData,
     achievements: Vec<Achievement>,
@@ -50,6 +71,36 @@ impl PlayerData {
             items: Vec::new(),
             character_equip_guid_map: HashMap::new(),
         }
+    }
+
+    pub fn item_count(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn character_count(&self) -> usize {
+        self.characters.len()
+    }
+
+    pub fn achievement_count(&self) -> usize {
+        self.achievements.len()
+    }
+
+    pub fn artifact_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.has_equip() && item.equip().has_reliquary())
+            .count()
+    }
+
+    pub fn weapon_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.has_equip() && item.equip().has_weapon())
+            .count()
+    }
+
+    pub fn material_count(&self) -> usize {
+        self.items.iter().filter(|item| item.has_material()).count()
     }
 
     pub fn process_achievements(&mut self, achievements: &[Achievement]) {
