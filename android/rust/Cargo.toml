@@ -1,0 +1,36 @@
+[package]
+name = "irminsul"
+version = "0.1.17"
+authors = ["irminsul-android contributors"]
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+name = "irminsul"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Packet sniffer and proto definitions (core capture logic)
+auto-artifactarium = { git = "https://github.com/konkers/auto-artifactarium", rev = "07be683fb80e9940d8cc629ab769dbd6307bcaaa" }
+
+# JNI bindings for Android
+jni = "0.21"
+
+# Error handling
+anyhow = "1.0"
+
+# Serialization
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.143"
+indexmap = "2.11.1"
+chrono = "0.4.42"
+
+# Crypto / encoding
+base64 = "0.22.1"
+
+# Logging
+tracing = "0.1.41"
+
+# HTTP client for data_cache.json
+ureq = { version = "2.10", default-features = false, features = ["tls"] }

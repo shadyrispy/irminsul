@@ -76,9 +76,9 @@ android {
     }
 
     // Rust library build task using cargo-ndk
-    // Builds from the project root directory (../../..) which contains our Cargo.toml
+    // Builds from android/rust/ which is now a self-contained Android-only crate
     task buildRustLibs(type: Exec) {
-        workingDir "${projectDir}/../.."
+        workingDir "${projectDir}/../rust"
         environment 'PATH', "${System.getenv('HOME')}/.cargo/bin:${System.getenv('PATH')}"
         commandLine 'cargo', 'ndk',
                 '-t', 'arm64-v8a',

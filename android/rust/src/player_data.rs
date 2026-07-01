@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use anime_game_data::{AnimeGameData, Property, SkillType};
 use anyhow::Result;
 pub use auto_artifactarium::Achievement;
 pub use auto_artifactarium::r#gen::protos::{AvatarInfo, Item};
@@ -8,6 +7,7 @@ use chrono::Utc;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+use crate::data_types::{DataCache, Property, SkillType};
 use crate::good::{self, fake_uninitialized_4th_line};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ impl Default for ExportSettings {
 }
 
 pub struct PlayerData {
-    game_data: AnimeGameData,
+    data_cache: DataCache,
     achievements: Vec<Achievement>,
     characters: Vec<AvatarInfo>,
     items: Vec<Item>,
@@ -73,9 +73,9 @@ pub struct PlayerData {
 }
 
 impl PlayerData {
-    pub fn new(game_data: AnimeGameData) -> Self {
+    pub fn new(data_cache: DataCache) -> Self {
         Self {
-            game_data,
+            data_cache,
             achievements: Vec::new(),
             characters: Vec::new(),
             items: Vec::new(),
@@ -180,7 +180,7 @@ impl PlayerData {
                     return None;
                 }
 
-                let name = self.game_data.get_character(character.avatar_id).ok()?;
+                let name = self.data_cache.get_character(character.avatar_id)?;
                 let level = character.prop_map.get(&4001).map(|prop| prop.val as u32)?;
                 let ascension = character.prop_map.get(&1002).map(|prop| prop.val as u32)?;
                 let constellation = character.talent_id_list.len() as u32;
@@ -190,7 +190,7 @@ impl PlayerData {
                 let mut burst = 1;
 
                 for (id, level) in &character.skill_level_map {
-                    let Some(ty) = self.game_data.get_skill_type(*id).ok() else {
+                    let Some(ty) = self.data_cache.get_skill_type(*id) else {
                         continue;
                     };
                     match ty {
@@ -242,9 +242,8 @@ impl PlayerData {
                     .character_equip_guid_map
                     .get(&item.guid)
                     .and_then(|id| {
-                        self.game_data
+                        self.data_cache
                             .get_character(*id)
-                            .ok()
                             .map(|location| good::to_good_key(location).to_string())
                     })
                     .unwrap_or_default();
@@ -252,17 +251,20 @@ impl PlayerData {
                 if !equip.has_reliquary() {
                     return None;
                 }
-                let artifact_data = self.game_data.get_artifact(item.item_id).ok()?;
+                let artifact_data = self.data_cache.get_artifact(item.item_id)?;
                 let artifact = equip.reliquary();
                 let mut substats: IndexMap<Property, (f32, f32)> = IndexMap::new();
                 for substat_id in artifact.append_prop_id_list.iter() {
-                    let Some(substat) = self.game_data.get_affix(*substat_id).ok() else {
+                    let Some(substat) = self.data_cache.get_affix(*substat_id) else {
+                        continue;
+                    };
+                    let Some(property) = Property::from_name(&substat.property) else {
                         continue;
                     };
                     let entry = substats
-                        .entry(substat.property)
-                        .or_insert((0., substat.value as f32));
-                    entry.0 += substat.value as f32;
+                        .entry(property)
+                        .or_insert((0., substat.value));
+                    entry.0 += substat.value;
                 }
                 let substats = substats
                     .into_iter()
@@ -276,11 +278,12 @@ impl PlayerData {
                     .unactivated_prop_id_list
                     .iter()
                     .filter_map(|substat_id| {
-                        let substat = self.game_data.get_affix(*substat_id).ok()?;
+                        let substat = self.data_cache.get_affix(*substat_id)?;
+                        let property = Property::from_name(&substat.property)?;
                         Some(good::Substat {
-                            key: substat.property.good_name().to_string(),
-                            value: Self::round(substat.property, substat.value as f32),
-                            initial_value: Self::round(substat.property, substat.value as f32),
+                            key: property.good_name().to_string(),
+                            value: Self::round(property, substat.value),
+                            initial_value: Self::round(property, substat.value),
                         })
                     })
                     .collect();
@@ -291,9 +294,8 @@ impl PlayerData {
                 let astral_mark = artifact.starred;
                 let elixer_crafted = !artifact.elixer_choices.is_empty();
                 let main_stat_key = self
-                    .game_data
-                    .get_property(artifact.main_prop_id)
-                    .ok()?
+                    .data_cache
+                    .get_property(artifact.main_prop_id)?
                     .good_name()
                     .to_string();
 
@@ -331,16 +333,15 @@ impl PlayerData {
                     .character_equip_guid_map
                     .get(&item.guid)
                     .and_then(|id| {
-                        self.game_data
+                        self.data_cache
                             .get_character(*id)
-                            .ok()
                             .map(|location| good::to_good_key(location).to_string())
                     })
                     .unwrap_or_default();
                 if !equip.has_weapon() {
                     return None;
                 }
-                let weapon_data = self.game_data.get_weapon(item.item_id).ok()?;
+                let weapon_data = self.data_cache.get_weapon(item.item_id)?;
                 let weapon = equip.weapon();
                 let refinement = weapon
                     .affix_map
@@ -458,7 +459,7 @@ impl PlayerData {
                     return None;
                 }
                 let material = item.material();
-                let name = self.game_data.get_material(item.item_id).ok()?;
+                let name = self.data_cache.get_material(item.item_id)?;
 
                 Some((good::to_good_key(name), material.count))
             })

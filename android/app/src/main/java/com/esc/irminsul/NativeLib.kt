@@ -1,13 +1,21 @@
 package com.esc.irminsul
 
+import android.content.Context
 import android.util.Log
+import java.io.File
 
 object NativeLib {
     private const val TAG = "NativeLib"
+    private const val DATA_CACHE_ASSET = "data_cache.json"
+    private const val CACHE_SUBDIR = "irminsul_data_cache"
+
     private var libraryLoaded = false
     private var libraryLoadAttempted = false
     private var logCallback: LogCallback? = null
     private var dataCompleteCallback: DataCompleteCallback? = null
+
+    @Volatile
+    private var appContext: Context? = null
 
     interface LogCallback {
         fun onLog(message: String)
@@ -53,6 +61,10 @@ object NativeLib {
         dataCompleteCallback = callback
     }
 
+    fun attachContext(context: Context) {
+        appContext = context.applicationContext
+    }
+
     @JvmStatic
     fun log(message: String) {
         logCallback?.onLog(message)
@@ -75,6 +87,37 @@ object NativeLib {
         )
     }
 
+    /**
+     * Read the bundled `assets/data_cache.json` snapshot. Returned as a byte
+     * array that the native side can parse on first run, when no usable
+     * local cache exists and the network is unavailable.
+     */
+    @JvmStatic
+    fun readBundledDataCache(): ByteArray? {
+        val ctx = appContext ?: return null
+        return try {
+            ctx.assets.open(DATA_CACHE_ASSET).use { stream ->
+                stream.readBytes()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "No bundled data_cache.json asset: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Returns the directory used to persist `data_cache.json` and its meta
+     * file. Falls back to `context.cacheDir` if `filesDir` is unavailable.
+     */
+    fun cacheDirPath(context: Context): String {
+        val base = context.filesDir ?: context.cacheDir
+        val dir = File(base, CACHE_SUBDIR)
+        if (!dir.exists()) {
+            dir.mkdirs()
+        }
+        return dir.absolutePath
+    }
+
     fun initLogging() {
         ensureLibraryLoaded()
         if (libraryLoaded) {
@@ -82,13 +125,24 @@ object NativeLib {
         }
     }
 
-    fun createSniffer(): Int {
+    /**
+     * Initialise the native sniffer and load `data_cache.json`.
+     *
+     * @return a status JSON object containing `ok`, `error`, and
+     *   `data_cache_source/version/git_hash`. Returns null on link failure.
+     */
+    fun createSniffer(context: Context): String? {
         ensureLibraryLoaded()
-        return if (libraryLoaded) {
-            nativeCreateSniffer()
-        } else {
-            -1
-        }
+        if (!libraryLoaded) return null
+        attachContext(context)
+        return nativeCreateSniffer(cacheDirPath(context))
+    }
+
+    fun refreshDataCache(context: Context): String? {
+        ensureLibraryLoaded()
+        if (!libraryLoaded) return null
+        attachContext(context)
+        return nativeRefreshDataCache(cacheDirPath(context))
     }
 
     /**
@@ -142,7 +196,10 @@ object NativeLib {
     private external fun nativeInitLogging()
 
     @JvmStatic
-    private external fun nativeCreateSniffer(): Int
+    private external fun nativeCreateSniffer(cacheDir: String): String?
+
+    @JvmStatic
+    private external fun nativeRefreshDataCache(cacheDir: String): String?
 
     @JvmStatic
     private external fun nativeProcessPacket(packetData: ByteArray): String?

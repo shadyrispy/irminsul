@@ -145,11 +145,24 @@ class MainViewModel(private val context: Context) : ViewModel() {
         NativeLib.initLogging()
 
         if (NativeLib.isAvailable()) {
-            val result = NativeLib.createSniffer()
-            if (result == 0) {
-                addLog("Irminsul native library initialized successfully")
+            val resultJson = NativeLib.createSniffer(context)
+            if (resultJson != null) {
+                try {
+                    val obj = org.json.JSONObject(resultJson)
+                    val ok = obj.optBoolean("ok", false)
+                    val source = obj.optString("data_cache_source", "unknown")
+                    val version = obj.optInt("data_cache_version", 0)
+                    if (ok) {
+                        addLog("Irminsul native library initialized (data_cache=$source v$version)")
+                    } else {
+                        val err = obj.optString("error", "unknown error")
+                        addLog("Failed to initialize native library: $err")
+                    }
+                } catch (e: Exception) {
+                    addLog("Failed to initialize native library: $resultJson")
+                }
             } else {
-                addLog("Failed to initialize native library: $result")
+                addLog("Failed to initialize native library: createSniffer returned null")
             }
         } else {
             addLog("Warning: Native library not available. Packet parsing disabled.")
@@ -294,7 +307,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
         logList.clear()
         _uiState.value = UiState()
         NativeLib.destroySniffer()
-        NativeLib.createSniffer()
+        NativeLib.createSniffer(context)
         initProcessing()
         showToast(context.getString(R.string.data_reset))
         addLog("Data reset!")
