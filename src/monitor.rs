@@ -3,7 +3,6 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
 
-use anime_game_data::AnimeGameData;
 use anyhow::{Context, Result, anyhow};
 use auto_artifactarium::{
     GameCommand, GamePacket, GameSniffer, matches_achievement_packet, matches_avatar_packet,
@@ -11,11 +10,11 @@ use auto_artifactarium::{
 };
 use base64::prelude::*;
 use chrono::prelude::*;
-use flate2::read::GzDecoder;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::capture::PacketCapture;
+use crate::data_cache::DataCache;
 use crate::player_data::PlayerData;
 use crate::{APP_ID, AppState, DataUpdated, Message, State};
 
@@ -66,8 +65,8 @@ impl Monitor {
         log_packet_rx: watch::Receiver<bool>,
     ) -> Result<Self> {
         let mut app_state = AppStateManager::new(state_tx.borrow().clone(), state_tx.clone());
-        let game_data = get_database(&mut app_state, &mut ui_message_rx).await?;
-        let player_data = PlayerData::new(game_data);
+        let data_cache = get_database(&mut app_state, &mut ui_message_rx).await?;
+        let player_data = PlayerData::new(data_cache);
         let keys = load_keys()?;
         let sniffer = GameSniffer::new().set_initial_keys(keys);
         let (packet_tx, packet_rx) = mpsc::unbounded_channel();
@@ -172,14 +171,17 @@ impl Monitor {
 async fn get_database(
     app_state: &mut AppStateManager,
     _ui_message_rx: &mut mpsc::UnboundedReceiver<Message>,
-) -> Result<AnimeGameData> {
+) -> Result<DataCache> {
     app_state.update_app_state(State::CheckingForData);
 
-    static DATABASE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/game_data.gz"));
-    let reader = GzDecoder::new(DATABASE);
-    let db = anime_game_data::AnimeGameData::new_from_reader(reader)?;
+    // Use the user's cache directory to persist data_cache.json between runs.
+    // Falls back to fetching the remote directly if no cache dir is available.
+    let cache_path = dirs::cache_dir()
+        .map(|d| d.join("irminsul").join("data_cache.json"));
 
-    Ok(db)
+    let cache_ref = cache_path.as_deref();
+    let data_cache = DataCache::load_or_fetch_async(cache_ref).await?;
+    Ok(data_cache)
 }
 
 async fn capture_task(

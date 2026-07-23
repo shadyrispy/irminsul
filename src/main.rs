@@ -17,6 +17,7 @@ use crate::player_data::ExportSettings;
 mod admin;
 mod app;
 mod capture;
+mod data_cache;
 mod good;
 mod monitor;
 mod player_data;

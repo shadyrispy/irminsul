@@ -144,7 +144,10 @@ class MainViewModel(private val context: Context) : ViewModel() {
         NativeLib.initLogging()
 
         if (NativeLib.isAvailable()) {
-            val result = NativeLib.createSniffer()
+            // Use the app's private files directory to cache data_cache.json
+            // between runs so we avoid re-downloading on every launch.
+            val cacheDir = context.filesDir.absolutePath
+            val result = NativeLib.createSniffer(cacheDir)
             if (result == 0) {
                 addLog("Irminsul native library initialized successfully")
             } else {

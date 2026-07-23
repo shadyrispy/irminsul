@@ -1,3 +1,4 @@
+pub mod data_cache;
 pub mod good;
 pub mod player_data;
 pub mod uiaf;

@@ -82,10 +82,10 @@ object NativeLib {
         }
     }
 
-    fun createSniffer(): Int {
+    fun createSniffer(cacheDir: String? = null): Int {
         ensureLibraryLoaded()
         return if (libraryLoaded) {
-            nativeCreateSniffer()
+            nativeCreateSniffer(cacheDir)
         } else {
             -1
         }
@@ -142,7 +142,7 @@ object NativeLib {
     private external fun nativeInitLogging()
 
     @JvmStatic
-    private external fun nativeCreateSniffer(): Int
+    private external fun nativeCreateSniffer(cacheDir: String?): Int
 
     @JvmStatic
     private external fun nativeProcessPacket(packetData: ByteArray): String?

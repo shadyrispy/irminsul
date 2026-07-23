@@ -16,10 +16,6 @@ all-features = true
 targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [dependencies]
-# Keep these in sync with dev-dependencies below
-anime-game-data = { git = "https://github.com/konkers/anime-game-data", rev = "222bab5d8f3f7c5052360672a9d882e766e70062" }
-flate2 = "1.1.9"
-
 anyhow = "1.0.99"
 async-watcher = "0.3.0"
 auto-artifactarium = { git = "https://github.com/konkers/auto-artifactarium", rev = "07be683fb80e9940d8cc629ab769dbd6307bcaaa" }
@@ -32,7 +28,7 @@ tracing = { version = "0.1.41" }
 
 # Desktop-only dependencies
 [target.'cfg(not(target_os = "android"))'.dependencies]
-anime-game-data = { git = "https://github.com/konkers/anime-game-data", rev = "222bab5d8f3f7c5052360672a9d882e766e70062", features = ["network"] }
+reqwest = { version = "0.12.23", features = ["gzip", "stream"] }
 tokio = { version = "1.47.1", features = [
 	"rt",
 	"tokio-macros",
@@ -41,6 +37,7 @@ tokio = { version = "1.47.1", features = [
 ] }
 clap = { version = "4.5.47", features = ["derive"] }
 ctrlc = "3.4.7"
+dirs = "5.0"
 eframe = { version = "0.32", default-features = false, features = [
 	"accesskit",     # Make egui compatible with screen readers. NOTE: adds a lot of dependencies.
 	"default_fonts", # Embed the default egui fonts.
@@ -61,7 +58,6 @@ log = "0.4.27"
 notify = "5.2.0"
 open = "5.3.2"
 regex = "1.11.2"
-reqwest = { version = "0.12.23", features = ["gzip", "stream"] }
 self_update = "0.42.0"
 tempfile = "3.21.0"
 tokio-util = "0.7.16"
@@ -78,21 +74,13 @@ windows = { version = "0.61.3", features = [
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+reqwest = { version = "0.12.23", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [build-dependencies]
-# Keep these in sync with dependencies above
-anime-game-data = { git = "https://github.com/konkers/anime-game-data", rev = "222bab5d8f3f7c5052360672a9d882e766e70062" }
-flate2 = "1.1.9"
-
-# Desktop build-dependencies (needs network for game data download)
-[target.'cfg(not(target_os = "android"))'.build-dependencies]
-anime-game-data = { git = "https://github.com/konkers/anime-game-data", rev = "222bab5d8f3f7c5052360672a9d882e766e70062", features = ["network"] }
-tokio = { version = "1.47.1", features = [
-	"rt",
-	"tokio-macros",
-	"macros",
-	"rt-multi-thread",
-] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.143", features = ["alloc"] }
+anyhow = "1.0.99"
+reqwest = { version = "0.12.23", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1.23"
@@ -103,13 +91,6 @@ opt-level = 2 # fast and small wasm
 # Optimize all dependencies even in debug builds:
 [profile.dev.package."*"]
 opt-level = 2
-
-# Uncomment for local debugging
-# [patch."https://github.com/konkers/anime-game-data"]
-# anime-game-data = { path = "../anime-game-data" }
-
-[patch."https://github.com/konkers/anime-game-data"]
-anime-game-data = { git = "https://github.com/shadyrispy/anime-game-data", branch = "main" }
 
 [patch."https://github.com/konkers/auto-artifactarium"]
 auto-artifactarium = { git = "https://github.com/shadyrispy/auto-artifactarium", branch = "feat/heuristic-matching" }

@@ -7,6 +7,7 @@
 #![cfg(target_os = "android")]
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use anyhow::Result;
@@ -15,10 +16,11 @@ use auto_artifactarium::{
 };
 use base64::Engine;
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JClass};
+use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jint, jstring};
 
 use crate::AchievementFormat;
+use crate::data_cache::DataCache;
 use crate::player_data::{ExportSettings, PlayerData};
 
 // ---------------------------------------------------------------------------
@@ -131,14 +133,15 @@ fn extract_and_prepare_packet(data: &[u8]) -> Option<Vec<u8>> {
 // Database initialization
 // ---------------------------------------------------------------------------
 
-fn init_player_data() -> Result<PlayerData> {
-    use anime_game_data::AnimeGameData;
-    use flate2::read::GzDecoder;
-
-    static DATABASE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/game_data.gz"));
-    let reader = GzDecoder::new(DATABASE);
-    let db = AnimeGameData::new_from_reader(reader)?;
-    Ok(PlayerData::new(db))
+/// Initializes a [`PlayerData`] by loading the `DataCache` (downloading it
+/// from `https://ggartifact.com/good/data_cache.json` on first run, then
+/// caching to `cache_dir/data_cache.json`). The material map is embedded at
+/// build time (see `build.rs` and `PlayerData::MATERIAL_MAP_BYTES`).
+fn init_player_data(cache_dir: Option<&str>) -> Result<PlayerData> {
+    let cache_path = cache_dir.map(|d| PathBuf::from(d).join("data_cache.json"));
+    let cache_ref = cache_path.as_deref();
+    let data_cache = DataCache::load_or_fetch_blocking(cache_ref)?;
+    Ok(PlayerData::new(data_cache))
 }
 
 // ---------------------------------------------------------------------------
@@ -174,8 +177,9 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeInitLogging(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeCreateSniffer(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
+    cache_dir: JString,
 ) -> jint {
     let mut state = GLOBAL_STATE.lock().unwrap();
 
@@ -189,7 +193,16 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeCreateSniffe
 
     let sniffer = GameSniffer::new().set_initial_keys(keys);
 
-    let player_data = match init_player_data() {
+    let cache_dir_str = if cache_dir.is_null() {
+        None
+    } else {
+        match env.get_string(&cache_dir) {
+            Ok(s) => Some(s.into()),
+            Err(_) => None,
+        }
+    };
+
+    let player_data = match init_player_data(cache_dir_str.as_deref()) {
         Ok(pd) => pd,
         Err(e) => {
             log_to_android("ERROR", &format!("Failed to init player data: {}", e));
