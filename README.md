@@ -60,3 +60,14 @@ cargo ndk -t arm64-v8a -o app/src/main/jniLibs build --release
 替换成 `../irminsul-deps/{agd,aa}` —— 即 shadyrispy fork 的两个改动（network feature 开关、
 启发式包匹配）rebase 到上游最新后的本地副本。
 等这两个 fork 分支 rebase 并 push 后，删掉 `.cargo/config.toml`、把 patch 指向 git 分支即可。
+
+### submodule 地址
+
+`core/` 目前指向本地相对路径 `../irminsul-core`（本机的 core 仓库）。推送到远端前改成真实 URL：
+
+```bash
+git submodule set-url -- core https://github.com/<you>/irminsul-core
+```
+
+`core` 本身是 `konkers/irminsul` 的 fork，只多了「加 `[lib]` + 裁剪桌面代码」两类提交，
+上游发版时 `git -C core fetch upstream && git -C core merge <tag>` 即可，冲突面很小。
