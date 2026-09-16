@@ -1,0 +1,27 @@
+[package]
+name = "irminsul-jni"
+version = "1.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+# Produces libirminsul.so, which is what NativeLib.kt loads.
+name = "irminsul"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+irminsul = { path = "../../core" }
+auto-artifactarium = { git = "https://github.com/konkers/auto-artifactarium", rev = "4ba25fac64b88970143af6bc2a2ef51338e620d0" }
+anyhow = "1.0.99"
+base64 = "0.22.1"
+chrono = "0.4.42"
+jni = "0.21"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.143", features = ["alloc"] }
+
+[profile.release]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 2

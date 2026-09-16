@@ -1,0 +1,27 @@
+{
+  "buildFiles": [
+    "/Users/esc/Documents/yas2/irminsul-android/app/src/main/c/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/Users/esc/.local/share/mise/installs/android-sdk/22.0/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/Users/esc/Documents/yas2/irminsul-android/app/.cxx/Debug/4j6c4n58/arm64-v8a",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/Users/esc/.local/share/mise/installs/android-sdk/22.0/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/Users/esc/Documents/yas2/irminsul-android/app/.cxx/Debug/4j6c4n58/arm64-v8a",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "capture::@6890427a1f51a3e7e1df": {
+      "artifactName": "capture",
+      "abi": "arm64-v8a",
+      "output": "/Users/esc/Documents/yas2/irminsul-android/app/build/intermediates/cxx/Debug/4j6c4n58/obj/arm64-v8a/libcapture.so",
+      "runtimeFiles": []
+    }
+  }
+}

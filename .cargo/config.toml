@@ -1,0 +1,10 @@
+# Local overrides for the two patched dependencies (rebase of the shadyrispy forks
+# onto the upstream revisions pinned in core/Cargo.toml).
+# Remove this file once those branches are rebased and pushed:
+#   anime-game-data     -> shadyrispy/anime-game-data@main
+#   auto-artifactarium  -> shadyrispy/auto-artifactarium@feat/heuristic-matching
+[patch."https://github.com/konkers/anime-game-data"]
+anime-game-data = { path = "../irminsul-deps/agd" }
+
+[patch."https://github.com/konkers/auto-artifactarium"]
+auto-artifactarium = { path = "../irminsul-deps/aa" }

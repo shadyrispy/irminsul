@@ -1,0 +1,9 @@
+*.iml
+.gradle
+local.properties
+app/src/main/jniLibs/
+app/build/
+app/release.keystore
+*.apk
+.DS_Store
+rust/irminsul-jni/target/

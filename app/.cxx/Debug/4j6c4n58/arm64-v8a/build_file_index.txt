@@ -1,0 +1,1 @@
+/Users/esc/Documents/yas2/irminsul-android/app/src/main/c/CMakeLists.txt
