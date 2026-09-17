@@ -7,4 +7,6 @@ app/.cxx/
 app/release.keystore
 *.apk
 .DS_Store
+.kotlin/
 rust/irminsul-jni/target/
+rust/irminsul-jni/.cargo.disabled-local-patch/
