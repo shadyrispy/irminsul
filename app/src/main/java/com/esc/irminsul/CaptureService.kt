@@ -18,6 +18,8 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.net.Inet4Address
 import java.net.Inet6Address
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -214,6 +216,9 @@ class CaptureService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val captureWorker: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "irminsul-capture-worker").apply { isDaemon = true }
+    }
 
     @Volatile
     private var bytesSent: Long = 0
@@ -315,13 +320,13 @@ class CaptureService : VpnService() {
         Log.d(TAG, "VPN interface established, starting capture")
 
         val tunfd = vpnInterface!!.fd
-        Thread {
+        captureWorker.execute {
             nativeSetDnsServer(realDnsV4, 53, 4)
             if (hasIPv6 && realDnsV6 != null) {
                 nativeSetDnsServer(realDnsV6, 53, 6)
             }
             nativeRunPacketLoop(tunfd)
-        }.start()
+        }
     }
 
     fun stopCapture() {
@@ -336,10 +341,11 @@ class CaptureService : VpnService() {
             Log.e(TAG, "Error stopping native capture", e)
         }
 
-        Thread {
+        captureWorker.execute {
             try {
                 Thread.sleep(300)
-            } catch (_: InterruptedException) {}
+            } catch (_: InterruptedException) {
+            }
 
             try {
                 vpnInterface?.close()
@@ -350,10 +356,12 @@ class CaptureService : VpnService() {
 
             setPacketQueue(null)
             CaptureStatus.updateCapturingStatus(false)
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            mainHandler.post {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
             Log.d(TAG, "Capture stopped")
-        }.start()
+        }
     }
 
     fun onPacketCaptured(packetData: ByteArray) {
@@ -543,6 +551,7 @@ class CaptureService : VpnService() {
     override fun onDestroy() {
         stopCapture()
         super.onDestroy()
+        captureWorker.shutdown()
     }
 
     override fun onRevoke() {

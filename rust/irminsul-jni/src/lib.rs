@@ -38,12 +38,33 @@ static JAVA_VM: Mutex<Option<jni::JavaVM>> = Mutex::new(None);
 
 const PCAPDROID_TRAILER_SIZE: usize = 32;
 
+// Lock helpers that never panic in the JNI boundary. A poisoned mutex (a
+// panic occurred while holding it elsewhere) or a contended lock must not
+// crash the whole Android process; return None instead.
+fn lock_java_vm() -> Option<std::sync::MutexGuard<'static, Option<jni::JavaVM>>> {
+    match JAVA_VM.lock() {
+        Ok(guard) => Some(guard),
+        Err(poisoned) => Some(poisoned.into_inner()),
+    }
+}
+
+fn lock_global_state() -> Option<std::sync::MutexGuard<'static, Option<SnifferState>>> {
+    match GLOBAL_STATE.lock() {
+        Ok(guard) => Some(guard),
+        Err(poisoned) => Some(poisoned.into_inner()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Logging helper
 // ---------------------------------------------------------------------------
 
 fn log_to_android(level: &str, message: &str) {
-    if let Some(vm) = JAVA_VM.lock().unwrap().as_ref() {
+    let guard = match lock_java_vm() {
+        Some(g) => g,
+        None => return,
+    };
+    if let Some(vm) = guard.as_ref() {
         if let Ok(mut env) = vm.attach_current_thread() {
             let msg_str = format!("[{}] {}", level, message);
             if let Ok(msg) = env.new_string(&msg_str) {
@@ -164,8 +185,16 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeInitLogging(
     env: JNIEnv,
     _class: JClass,
 ) {
-    let vm = env.get_java_vm().expect("Failed to get JavaVM");
-    *JAVA_VM.lock().unwrap() = Some(vm);
+    let vm = match env.get_java_vm() {
+        Ok(vm) => vm,
+        Err(e) => {
+            log_to_android("ERROR", &format!("Failed to get JavaVM: {}", e));
+            return;
+        }
+    };
+    if let Some(mut guard) = lock_java_vm() {
+        *guard = Some(vm);
+    }
     log_to_android("INFO", "Native library initialized");
 }
 
@@ -174,7 +203,13 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeCreateSniffe
     _env: JNIEnv,
     _class: JClass,
 ) -> jint {
-    let mut state = GLOBAL_STATE.lock().unwrap();
+    let mut state = match lock_global_state() {
+        Some(s) => s,
+        None => {
+            log_to_android("ERROR", "Failed to lock GLOBAL_STATE");
+            return -3;
+        }
+    };
 
     let keys = match load_keys() {
         Ok(k) => k,
@@ -234,7 +269,10 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeProcessPacke
         None => return std::ptr::null_mut(),
     };
 
-    let mut state_guard = GLOBAL_STATE.lock().unwrap();
+    let mut state_guard = match lock_global_state() {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
     let state = match state_guard.as_mut() {
         Some(s) => s,
         None => return std::ptr::null_mut(),
@@ -323,7 +361,10 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeExportGood(
     _class: JClass,
     settings_json: jstring,
 ) -> jstring {
-    let state_guard = GLOBAL_STATE.lock().unwrap();
+    let state_guard = match lock_global_state() {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
     let state = match state_guard.as_ref() {
         Some(s) => s,
         None => return std::ptr::null_mut(),
@@ -365,7 +406,10 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeExportAchiev
     _class: JClass,
     format_code: jint,
 ) -> jstring {
-    let state_guard = GLOBAL_STATE.lock().unwrap();
+    let state_guard = match lock_global_state() {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
     let state = match state_guard.as_ref() {
         Some(s) => s,
         None => return std::ptr::null_mut(),
@@ -403,7 +447,10 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeDestroySniff
     _env: JNIEnv,
     _class: JClass,
 ) {
-    let mut state = GLOBAL_STATE.lock().unwrap();
+    let mut state = match lock_global_state() {
+        Some(s) => s,
+        None => return,
+    };
     *state = None;
     log_to_android("INFO", "Sniffer destroyed");
 }

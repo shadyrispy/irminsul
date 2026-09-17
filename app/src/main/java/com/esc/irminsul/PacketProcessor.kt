@@ -147,7 +147,9 @@ class PacketProcessor(
 
                     val packetData = ByteArray(inclLen)
                     if (inputStream.read(packetData) != inclLen) break
-                    packetQueue.offer(packetData)
+                    // Block until space is available instead of silently dropping
+                    // packets, so a complete PCAP import never loses data.
+                    packetQueue.put(packetData)
                 }
             }
         } catch (e: Exception) {

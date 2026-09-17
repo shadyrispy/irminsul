@@ -3,6 +3,7 @@
 local.properties
 app/src/main/jniLibs/
 app/build/
+app/.cxx/
 app/release.keystore
 *.apk
 .DS_Store

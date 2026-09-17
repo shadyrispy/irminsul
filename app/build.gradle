@@ -80,7 +80,13 @@ android {
     // path dependency (core/ git submodule).
     task buildRustLibs(type: Exec) {
         workingDir "${projectDir}/../rust/irminsul-jni"
-        environment 'PATH', "${System.getenv('HOME')}/.cargo/bin:${System.getenv('PATH')}"
+        // Respect the inherited PATH (e.g. injected by `mise exec` or a
+        // cargo-ndk shim) and only fall back to ~/.cargo/bin as a safety net,
+        // so mise-managed toolchains take priority over a local ~/.cargo.
+        def cargoDir = "${System.getenv('HOME')}/.cargo/bin"
+        def basePath = System.getenv('PATH') ?: ''
+        def newPath = basePath.contains(cargoDir) ? basePath : "${basePath}:${cargoDir}"
+        environment 'PATH', newPath
         // NOTE: whitespace separated, no quoting support (values must not contain spaces)
         def extraArgs = (System.getenv('CARGO_EXTRA_ARGS') ?: '')
                 .trim().split("\\s+").findAll { it }

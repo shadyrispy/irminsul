@@ -1,6 +1,0 @@
-# ninja log v5
-0	108	1789528378776526947	CMakeFiles/capture.dir/jni_bridge.c.o	ac5671088382f81c
-0	115	1789528378784659959	CMakeFiles/capture.dir/zdtun/utils.c.o	2d76adcdb4b489e
-0	119	1789528378788562443	CMakeFiles/capture.dir/capture_vpn.c.o	33f65a7d0575b707
-0	156	1789528378825790104	CMakeFiles/capture.dir/zdtun/zdtun.c.o	7b5f7ed1b2fd93a3
-156	199	1789528378866978584	/Users/esc/Documents/yas2/irminsul-android/app/build/intermediates/cxx/Debug/4j6c4n58/obj/arm64-v8a/libcapture.so	a68b571d52f1ca32
