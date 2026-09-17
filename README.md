@@ -54,12 +54,17 @@ cargo ndk -t arm64-v8a -o app/src/main/jniLibs build --release
 设置 `GITHUB_TOKEN` / `GH_TOKEN` 可提高 GitHub API 速率限制。下载失败且 `core/target/game_data.json`
 无缓存时构建直接 panic，避免产出数据为空的包。
 
-### 依赖 patch（临时）
+### 依赖 patch
 
 `core/Cargo.toml` 依赖的是 konkers 原仓库的两个 rev，本仓库用 `.cargo/config.toml` 把它们
-替换成 `../irminsul-deps/{agd,aa}` —— 即 shadyrispy fork 的两个改动（network feature 开关、
-启发式包匹配）rebase 到上游最新后的本地副本。
-等这两个 fork 分支 rebase 并 push 后，删掉 `.cargo/config.toml`、把 patch 指向 git 分支即可。
+patch 到 shadyrispy fork 的 git 分支（V70 protos、启发式包匹配、反射式 proto JSON、
+network/CDN 数据源）：
+
+* `shadyrispy/anime-game-data@main`
+* `shadyrispy/auto-artifactarium@feat/heuristic-matching`
+
+改动这两个 fork 后，在 `rust/irminsul-jni` 下跑 `cargo update -p auto-artifactarium -p anime-game-data`
+刷新 lockfile 即可。
 
 ### submodule 地址
 

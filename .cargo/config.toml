@@ -1,10 +1,7 @@
-# Local overrides for the two patched dependencies (rebase of the shadyrispy forks
-# onto the upstream revisions pinned in core/Cargo.toml).
-# Remove this file once those branches are rebased and pushed:
-#   anime-game-data     -> shadyrispy/anime-game-data@main
-#   auto-artifactarium  -> shadyrispy/auto-artifactarium@feat/heuristic-matching
+# Patch the two konkers deps to the shadyrispy forks (V70 protos, heuristic
+# matching, reflection-based proto JSON for the UI, network/CDN data source).
 [patch."https://github.com/konkers/anime-game-data"]
-anime-game-data = { path = "../irminsul-deps/agd" }
+anime-game-data = { git = "https://github.com/shadyrispy/anime-game-data.git", branch = "main" }
 
 [patch."https://github.com/konkers/auto-artifactarium"]
-auto-artifactarium = { path = "../irminsul-deps/aa" }
+auto-artifactarium = { git = "https://github.com/shadyrispy/auto-artifactarium.git", branch = "feat/heuristic-matching" }

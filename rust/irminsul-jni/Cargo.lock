@@ -29,6 +29,7 @@ dependencies = [
 [[package]]
 name = "anime-game-data"
 version = "0.1.0"
+source = "git+https://github.com/shadyrispy/anime-game-data.git?branch=main#538e1dae35786fb34d23d76a22dda054858160a5"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -121,6 +122,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "auto-artifactarium"
 version = "1.4.0"
+source = "git+https://github.com/shadyrispy/auto-artifactarium.git?branch=feat%2Fheuristic-matching#0d1e04d1a03d62cd70ed71596d0a48fe82d7cc94"
 dependencies = [
  "anyhow",
  "base64",
