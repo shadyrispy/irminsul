@@ -94,12 +94,15 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         setContent {
-            IrminsulTheme {
+            // Capture screen still hardcodes its dark palette; until it is
+            // tokenized onto MaterialTheme the app locks to the dark scheme.
+            IrminsulTheme(darkTheme = true) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(
+                    com.esc.irminsul.ui.IrminsulApp(viewModel = viewModel) {
+                        MainScreen(
                         viewModel = viewModel,
                         vpnPermissionLauncher = vpnPermissionLauncher,
                         batteryOptimizationLauncher = batteryOptimizationLauncher,
@@ -120,6 +123,7 @@ class MainActivity : ComponentActivity() {
                         onSetAchievementFormat = { format -> viewModel.setAchievementExportFormat(format) },
                         onOpenAchievements = { viewModel.openInCocogoat() }
                     )
+                    }
                 }
             }
         }

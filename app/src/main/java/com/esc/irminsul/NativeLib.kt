@@ -132,6 +132,20 @@ object NativeLib {
         }
     }
 
+    /**
+     * Return the full JSON (including the decoded proto body) of a single
+     * cached command, or null when the packet was evicted or the index is
+     * out of range.
+     */
+    fun commandBody(packetId: Long, commandIndex: Int): String? {
+        ensureLibraryLoaded()
+        return if (libraryLoaded) {
+            nativeCommandBody(packetId, commandIndex)
+        } else {
+            null
+        }
+    }
+
     fun destroySniffer() {
         if (libraryLoaded) {
             nativeDestroySniffer()
@@ -146,6 +160,9 @@ object NativeLib {
 
     @JvmStatic
     private external fun nativeProcessPacket(packetData: ByteArray): String?
+
+    @JvmStatic
+    private external fun nativeCommandBody(packetId: Long, commandIndex: Int): String?
 
     @JvmStatic
     private external fun nativeExportGood(settingsJson: String?): String?

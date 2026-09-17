@@ -131,6 +131,7 @@ dependencies = [
  "protobuf-codegen",
  "rand_mt",
  "rsa",
+ "serde_json",
  "tracing",
 ]
 

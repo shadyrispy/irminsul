@@ -15,6 +15,7 @@ class LocalStorage(context: Context) {
         private const val KEY_LAST_EXPORT_TIME = "last_export_time"
         private const val KEY_EXPORT_COUNT = "export_count"
         private const val KEY_EXPORT_SETTINGS = "export_settings"
+        private const val KEY_AUTO_STOP_ENABLED = "auto_stop_enabled"
         private const val MAX_HISTORY_SIZE = 20
     }
 
@@ -95,6 +96,12 @@ class LocalStorage(context: Context) {
         prefs.edit()
             .putString(KEY_EXPORT_HISTORY, historyToJson(history))
             .apply()
+    }
+
+    fun getAutoStopEnabled(): Boolean = prefs.getBoolean(KEY_AUTO_STOP_ENABLED, true)
+
+    fun setAutoStopEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_STOP_ENABLED, enabled).apply()
     }
 
     fun saveSettings(settings: ExportSettingsSnapshot) {

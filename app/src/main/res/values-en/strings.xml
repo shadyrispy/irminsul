@@ -150,4 +150,22 @@
     <string name="time">Time</string>
     <string name="type">Type</string>
     <string name="unknown">Unknown</string>
+
+    <!-- Packets -->
+    <string name="capture_nav">Capture</string>
+    <string name="packets_title">Packets</string>
+    <string name="packet_count">%1$d commands</string>
+    <string name="packet_list_empty">No packets yet — start capture or import a PCAP file</string>
+    <string name="packet_search_hint">Search command or CmdId</string>
+    <string name="packet_clear">Clear</string>
+    <string name="packet_body_loading">Parsing…</string>
+    <string name="packet_body_unavailable">Command body unavailable (may have been evicted from cache)</string>
+    <string name="packet_copy_json">Copy JSON</string>
+    <string name="packet_copy_path">Copy path</string>
+    <string name="packet_parse_error">Parse error</string>
+    <string name="toast_copied">Copied</string>
+
+    <!-- Auto stop -->
+    <string name="auto_stop_title">Auto-stop when data complete</string>
+    <string name="auto_stop_subtitle">Stop VPN capture automatically once all data is parsed; packets stay browsable</string>
 </resources>

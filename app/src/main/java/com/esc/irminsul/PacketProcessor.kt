@@ -2,27 +2,29 @@ package com.esc.irminsul
 
 import android.util.Log
 import java.io.FileInputStream
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.SocketException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.BlockingQueue
 import org.json.JSONObject
 
+/** A raw L7 packet with the wall-clock time it was seen (live) or captured (pcap). */
+class RawPacket(val data: ByteArray, val timestampMillis: Long)
+
 class PacketProcessor(
     private val dataStore: DataStore,
-    private val packetQueue: BlockingQueue<ByteArray>,
+    private val packetLog: PacketLog,
+    private val packetQueue: BlockingQueue<RawPacket>,
     private val onDataUpdate: (items: Boolean, characters: Boolean, achievements: Boolean) -> Unit
 ) : Thread() {
 
     private companion object {
         private const val TAG = "PacketProcessor"
-        private const val UDP_PORT = 5123
         private const val PCAP_HDR_SIZE = 24
         private const val PCAP_REC_HDR_SIZE = 16
         private const val MAX_PACKET_SIZE = 65535
         private const val PCAP_MAGIC_LITTLE_ENDIAN = 0xA1B2C3D4.toInt()
+        private const val PCAP_MAGIC_NSEC_LITTLE_ENDIAN = 0xA1B23C4D.toInt()
+        private const val PCAP_MAGIC_NSEC_BIG_ENDIAN = 0x4D3CB2A1.toInt()
         private val PCAP_HDR_START_BYTES = ByteBuffer.wrap(hexToBytes("d4c3b2a1020004000000000000000000"))
 
         private fun hexToBytes(s: String): ByteArray {
@@ -49,8 +51,8 @@ class PacketProcessor(
         Log.d(TAG, "PacketProcessor started")
         while (running) {
             try {
-                val packetData = packetQueue.take()
-                processPacket(packetData)
+                val packet = packetQueue.take()
+                processPacket(packet)
             } catch (e: InterruptedException) {
                 currentThread().interrupt()
                 break
@@ -59,18 +61,18 @@ class PacketProcessor(
         Log.d(TAG, "PacketProcessor stopped")
     }
 
-    private fun processPacket(packetData: ByteArray) {
+    private fun processPacket(packet: RawPacket) {
         try {
-            val statusJson = NativeLib.processPacket(packetData)
+            val statusJson = NativeLib.processPacket(packet.data)
             if (statusJson != null) {
-                parseStatusJson(statusJson)
+                parseStatusJson(statusJson, packet.timestampMillis)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error processing packet", e)
         }
     }
 
-    private fun parseStatusJson(json: String) {
+    private fun parseStatusJson(json: String, timestampMillis: Long) {
         try {
             val obj = JSONObject(json)
             val hasItems = obj.optBoolean("has_items", false)
@@ -81,6 +83,35 @@ class PacketProcessor(
             val materialCount = obj.optInt("material_count", 0)
             val characterCount = obj.optInt("character_count", 0)
             val achievementCount = obj.optInt("achievement_count", 0)
+
+            val packetId = obj.optLong("packet_id", -1L)
+            obj.optJSONArray("commands")?.let { commands ->
+                val batch = ArrayList<PacketRecord>(commands.length())
+                for (i in 0 until commands.length()) {
+                    val cmd = commands.optJSONObject(i) ?: continue
+                    val fieldCount = if (cmd.isNull("field_count")) null else cmd.optInt("field_count")
+                    val briefKeys = buildList {
+                        cmd.optJSONArray("brief_keys")?.let { keys ->
+                            for (j in 0 until keys.length()) add(keys.optString(j))
+                        }
+                    }
+                    batch.add(
+                        PacketRecord(
+                            packetId = packetId,
+                            commandIndex = i,
+                            cmdId = cmd.optInt("cmd_id", 0),
+                            name = cmd.optString("name", "unknown"),
+                            isSent = cmd.optString("direction", "") == "sent",
+                            sizeBytes = cmd.optInt("size", 0),
+                            fieldCount = fieldCount,
+                            briefKeys = briefKeys,
+                            parseError = cmd.optBoolean("parse_error", false),
+                            timestampMillis = timestampMillis
+                        )
+                    )
+                }
+                packetLog.appendAll(batch)
+            }
 
             dataStore.updateStatus(
                 itemsLoaded = hasItems,
@@ -123,6 +154,10 @@ class PacketProcessor(
                 val hdrBuf = ByteBuffer.wrap(header)
                 val magic = hdrBuf.int
                 var byteOrder = if (magic == PCAP_MAGIC_LITTLE_ENDIAN) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
+                // Nanosecond-resolution pcap variant (magic 0xA1B23C4D in either
+                // byte order); the fraction field is nanos instead of micros.
+                val isNanosecond = magic == PCAP_MAGIC_NSEC_LITTLE_ENDIAN ||
+                        magic == PCAP_MAGIC_NSEC_BIG_ENDIAN
 
                 while (running) {
                     val recHeader = ByteArray(PCAP_REC_HDR_SIZE)
@@ -145,11 +180,19 @@ class PacketProcessor(
                         byteOrder = if (byteOrder == ByteOrder.LITTLE_ENDIAN) ByteOrder.BIG_ENDIAN else ByteOrder.LITTLE_ENDIAN
                     }
 
+                    val tsSec = recBuf.getInt(0).toLong() and 0xFFFFFFFFL
+                    val tsFraction = recBuf.getInt(4).toLong() and 0xFFFFFFFFL
+                    val packetTimestamp = if (isNanosecond) {
+                        tsSec * 1000 + tsFraction / 1_000_000
+                    } else {
+                        tsSec * 1000 + tsFraction / 1000
+                    }
+
                     val packetData = ByteArray(inclLen)
                     if (inputStream.read(packetData) != inclLen) break
                     // Block until space is available instead of silently dropping
                     // packets, so a complete PCAP import never loses data.
-                    packetQueue.put(packetData)
+                    packetQueue.put(RawPacket(packetData, packetTimestamp))
                 }
             }
         } catch (e: Exception) {

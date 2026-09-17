@@ -150,4 +150,22 @@
     <string name="time">时间</string>
     <string name="type">类型</string>
     <string name="unknown">未知</string>
+
+    <!-- Packets -->
+    <string name="capture_nav">捕获</string>
+    <string name="packets_title">数据包</string>
+    <string name="packet_count">%1$d 条命令</string>
+    <string name="packet_list_empty">暂无数据包，开始抓包或导入 PCAP 后显示</string>
+    <string name="packet_search_hint">搜索命令名或 CmdId</string>
+    <string name="packet_clear">清空</string>
+    <string name="packet_body_loading">解析中…</string>
+    <string name="packet_body_unavailable">命令内容不可用（可能已被缓存清理）</string>
+    <string name="packet_copy_json">复制 JSON</string>
+    <string name="packet_copy_path">复制路径</string>
+    <string name="packet_parse_error">解析失败</string>
+    <string name="toast_copied">已复制</string>
+
+    <!-- Auto stop -->
+    <string name="auto_stop_title">抓完数据后自动停止</string>
+    <string name="auto_stop_subtitle">全部数据解析完成后自动退出抓包，可继续在数据包页浏览</string>
 </resources>

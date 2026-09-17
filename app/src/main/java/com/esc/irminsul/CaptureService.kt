@@ -127,19 +127,19 @@ class CaptureService : VpnService() {
         val isRunning: Boolean get() = _isRunning
 
         @Volatile
-        private var _packetQueue: LinkedBlockingQueue<ByteArray>? = null
+        private var _packetQueue: LinkedBlockingQueue<RawPacket>? = null
 
         @Synchronized
-        fun setPacketQueue(queue: LinkedBlockingQueue<ByteArray>?) {
+        fun setPacketQueue(queue: LinkedBlockingQueue<RawPacket>?) {
             _packetQueue = queue
         }
 
         @Synchronized
         fun offerPacket(packetData: ByteArray) {
-            _packetQueue?.offer(packetData)
+            _packetQueue?.offer(RawPacket(packetData, System.currentTimeMillis()))
         }
 
-        val packetQueue: LinkedBlockingQueue<ByteArray>?
+        val packetQueue: LinkedBlockingQueue<RawPacket>?
             @Synchronized
             get() = _packetQueue
 

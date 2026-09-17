@@ -39,7 +39,6 @@ data class UiState(
     val charactersLoaded: Boolean = false,
     val weaponsLoaded: Boolean = false,
     val achievementsLoaded: Boolean = false,
-    val logs: List<String> = emptyList(),
     val canExportGood: Boolean = false,
     val canExportAchievements: Boolean = false,
     val toastMessage: String = "",
@@ -63,6 +62,7 @@ data class UiState(
     val minWeaponAscension: Int = 0,
     val minWeaponRarity: Int = 1,
     val achievementExportFormat: String = "UIAF",
+    val autoStopEnabled: Boolean = true,
     val exportHistory: List<LocalStorage.ExportRecord> = emptyList()
 )
 
@@ -86,7 +86,8 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private val dataStore: DataStore = DataStore()
     private val localStorage: LocalStorage = LocalStorage(context)
-    private var packetQueue: LinkedBlockingQueue<ByteArray>? = null
+    val packetLog: PacketLog = PacketLog()
+    private var packetQueue: LinkedBlockingQueue<RawPacket>? = null
     private var packetProcessor: PacketProcessor? = null
 
     private var isAutoStopping = false
@@ -101,9 +102,11 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private fun initProcessing() {
         dataStore.clear()
+        packetLog.clear()
         packetQueue = LinkedBlockingQueue(QUEUE_CAPACITY)
         packetProcessor = PacketProcessor(
             dataStore,
+            packetLog,
             packetQueue!!
         ) { items, characters, achievements ->
             onDataUpdated(items, characters, achievements)
@@ -123,6 +126,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     }
 
     init {
+        _uiState.value = _uiState.value.copy(autoStopEnabled = localStorage.getAutoStopEnabled())
         NativeLib.setLogCallback(object : NativeLib.LogCallback {
             override fun onLog(message: String) {
                 addLog(message)
@@ -184,7 +188,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
                     achievementsCount = status.achievementsCount
                 )
 
-                if (status.itemsLoaded && status.charactersLoaded && status.weaponsLoaded && status.achievementsLoaded && !isAutoStopping && _uiState.value.isCapturing) {
+                if (status.itemsLoaded && status.charactersLoaded && status.weaponsLoaded && status.achievementsLoaded && !isAutoStopping && _uiState.value.isCapturing && _uiState.value.autoStopEnabled) {
                     isAutoStopping = true
                     addLog("[SUCCESS] All data parsed, auto-stopping capture")
                     stopVpnCapture(autoStop = true)
@@ -400,9 +404,10 @@ class MainViewModel(private val context: Context) : ViewModel() {
     }
 
     fun addLog(message: String) {
+        // Debug-only breadcrumb; no UI surface reads the log list.
         viewModelScope.launch {
             logList.add(message)
-            _uiState.value = _uiState.value.copy(logs = logList.toList())
+            Log.d(TAG, message)
         }
     }
 
@@ -441,6 +446,11 @@ class MainViewModel(private val context: Context) : ViewModel() {
         _uiState.value = _uiState.value.copy(isCapturing = true, isPendingStateChange = false, showLaunchGameDialog = true)
         CaptureStatus.updateCapturingStatus(true)
         addLog("VPN capture started")
+    }
+
+    fun setAutoStopEnabled(enabled: Boolean) {
+        localStorage.setAutoStopEnabled(enabled)
+        _uiState.value = _uiState.value.copy(autoStopEnabled = enabled)
     }
 
     private fun stopVpnCapture(autoStop: Boolean = false) {

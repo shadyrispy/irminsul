@@ -7,16 +7,19 @@ pub mod achievements;
 pub mod uiaf;
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use anyhow::Result;
 use auto_artifactarium::{
-    GamePacket, GameSniffer, matches_achievement_packet, matches_avatar_packet, matches_item_packet,
+    GameCommand, GamePacket, GameSniffer, PacketDirection, matches_achievement_packet,
+    matches_avatar_packet, matches_item_packet,
 };
 use base64::Engine;
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass};
-use jni::sys::{jint, jstring};
+use jni::sys::{jint, jlong, jstring};
 
 use crate::achievements::{AchievementExport, AchievementFormat};
 use irminsul::player_data::{ExportSettings, PlayerData};
@@ -35,6 +38,63 @@ struct SnifferState {
 
 static GLOBAL_STATE: Mutex<Option<SnifferState>> = Mutex::new(None);
 static JAVA_VM: Mutex<Option<jni::JavaVM>> = Mutex::new(None);
+
+// ---------------------------------------------------------------------------
+// Decoded-command cache for the packet detail view
+// ---------------------------------------------------------------------------
+//
+// `nativeProcessPacket` returns only lightweight command summaries; the full
+// proto body JSON is produced on demand by `nativeCommandBody` from the raw
+// bytes cached here, keyed by the packet id assigned at processing time.
+// The sniffer is stateful (session keys, stream reassembly), so packets
+// cannot be re-decoded later — caching raw bytes is the only way to defer
+// full serialization. Eviction is by total cached proto bytes.
+
+const CMD_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+struct CachedCommand {
+    command_id: u16,
+    header_len: u16,
+    direction: PacketDirection,
+    proto_data: Vec<u8>,
+}
+
+struct CachedPacket {
+    id: u64,
+    commands: Vec<CachedCommand>,
+}
+
+static CMD_CACHE: Mutex<VecDeque<CachedPacket>> = Mutex::new(VecDeque::new());
+static CMD_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
+static NEXT_PACKET_ID: AtomicU64 = AtomicU64::new(0);
+
+fn cached_bytes(commands: &[CachedCommand]) -> usize {
+    commands.iter().map(|c| c.proto_data.len()).sum()
+}
+
+fn push_cached_packet(packet: CachedPacket) {
+    let mut cache = match CMD_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    CMD_CACHE_BYTES.fetch_add(cached_bytes(&packet.commands), Ordering::Relaxed);
+    cache.push_back(packet);
+    while CMD_CACHE_BYTES.load(Ordering::Relaxed) > CMD_CACHE_MAX_BYTES {
+        let Some(evicted) = cache.pop_front() else {
+            break;
+        };
+        CMD_CACHE_BYTES.fetch_sub(cached_bytes(&evicted.commands), Ordering::Relaxed);
+    }
+}
+
+fn clear_cached_packets() {
+    let mut cache = match CMD_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    cache.clear();
+    CMD_CACHE_BYTES.store(0, Ordering::Relaxed);
+}
 
 const PCAPDROID_TRAILER_SIZE: usize = 32;
 
@@ -282,7 +342,21 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeProcessPacke
         return std::ptr::null_mut();
     };
 
+    let packet_id = NEXT_PACKET_ID.fetch_add(1, Ordering::Relaxed);
+
+    let mut commands_json: Vec<serde_json::Value> = Vec::with_capacity(commands.len());
+    let mut cached_commands: Vec<CachedCommand> = Vec::with_capacity(commands.len());
     for command in &commands {
+        // Lightweight summary only — full body JSON is produced on demand by
+        // nativeCommandBody from the cached raw bytes.
+        commands_json.push(command.summary_json());
+        cached_commands.push(CachedCommand {
+            command_id: command.command_id,
+            header_len: command.header_len,
+            direction: command.direction,
+            proto_data: command.proto_data.clone(),
+        });
+
         if let Some(items) = matches_item_packet(command) {
             log_to_android(
                 "INFO",
@@ -318,6 +392,7 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeProcessPacke
     let achievement_count = state.player_data.achievement_count();
 
     let status_json = serde_json::json!({
+        "packet_id": packet_id,
         "has_items": state.has_items,
         "has_avatars": state.has_avatars,
         "has_achievements": state.has_achievements,
@@ -326,9 +401,16 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeProcessPacke
         "material_count": material_count,
         "character_count": character_count,
         "achievement_count": achievement_count,
+        "command_count": commands_json.len(),
+        "commands": commands_json,
     });
 
     let status_str = status_json.to_string();
+
+    push_cached_packet(CachedPacket {
+        id: packet_id,
+        commands: cached_commands,
+    });
 
     // Check if all data is collected — notify Kotlin
     let all_complete = state.has_items && state.has_avatars && state.has_achievements;
@@ -348,6 +430,47 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeProcessPacke
     }
 
     match env.new_string(&status_str) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Return the full JSON (including the decoded proto body) of a single
+/// cached command, produced on demand for the packet detail view.
+/// `packet_id` is the id assigned in `nativeProcessPacket`; `command_index`
+/// is the command's position within that packet's summary array. Returns
+/// null when the packet has been evicted from the cache or the index is out
+/// of range.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeCommandBody(
+    env: JNIEnv,
+    _class: JClass,
+    packet_id: jlong,
+    command_index: jint,
+) -> jstring {
+    let cache_guard = match CMD_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let Some(entry) = cache_guard.iter().find(|p| p.id == packet_id as u64) else {
+        return std::ptr::null_mut();
+    };
+    let Some(cached) = entry.commands.get(command_index as usize) else {
+        return std::ptr::null_mut();
+    };
+    let command = GameCommand {
+        command_id: cached.command_id,
+        header_len: cached.header_len,
+        data_len: cached.proto_data.len() as u32,
+        proto_data: cached.proto_data.clone(),
+        direction: cached.direction,
+    };
+    drop(cache_guard);
+
+    let Some(json) = command.to_json() else {
+        return std::ptr::null_mut();
+    };
+    match env.new_string(json.to_string()) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
@@ -452,6 +575,8 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeDestroySniff
         None => return,
     };
     *state = None;
+    drop(state);
+    clear_cached_packets();
     log_to_android("INFO", "Sniffer destroyed");
 }
 

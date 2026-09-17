@@ -80,6 +80,14 @@ android {
     // path dependency (core/ git submodule).
     task buildRustLibs(type: Exec) {
         workingDir "${projectDir}/../rust/irminsul-jni"
+        // Declare inputs so Gradle re-runs cargo when sources change; without
+        // this the task stays UP-TO-DATE forever once jniLibs exists.
+        inputs.dir "${projectDir}/../rust/irminsul-jni/src"
+        inputs.file "${projectDir}/../rust/irminsul-jni/Cargo.toml"
+        inputs.file "${projectDir}/../rust/irminsul-jni/Cargo.lock"
+        inputs.dir "${projectDir}/../core/src"
+        inputs.file "${projectDir}/../core/Cargo.toml"
+        inputs.file "${projectDir}/../core/build.rs"
         // Respect the inherited PATH (e.g. injected by `mise exec` or a
         // cargo-ndk shim) and only fall back to ~/.cargo/bin as a safety net,
         // so mise-managed toolchains take priority over a local ~/.cargo.
@@ -90,13 +98,23 @@ android {
         // NOTE: whitespace separated, no quoting support (values must not contain spaces)
         def extraArgs = (System.getenv('CARGO_EXTRA_ARGS') ?: '')
                 .trim().split("\\s+").findAll { it }
-        commandLine 'cargo', 'ndk',
+        // Gradle's Exec resolves the executable against the daemon's PATH, not
+        // the child environment set below — use the absolute path when present.
+        def homeCargo = "${System.getenv('HOME')}/.cargo/bin/cargo"
+        def cargoExe = file(homeCargo).exists() ? homeCargo : 'cargo'
+        commandLine cargoExe, 'ndk',
                 '-t', 'arm64-v8a',
                 '-o', "${projectDir}/src/main/jniLibs",
                 'build',
                 '--release',
                 '--lib',
                 *extraArgs
+
+        // Declare the produced native libs so Gradle treats src/main/jniLibs as
+        // a real task output. Without this, AGP's merge/package tasks cache the
+        // previously packaged .so and never refresh the APK when buildRustLibs
+        // rewrites it.
+        outputs.dir "${projectDir}/src/main/jniLibs"
     }
 
     preBuild.dependsOn buildRustLibs
@@ -125,6 +143,7 @@ dependencies {
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.ui:ui-graphics'
     implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.navigation:navigation-compose:2.7.7'
     implementation 'androidx.activity:activity-compose:1.9.0'
 
     // Lifecycle & ViewModel
