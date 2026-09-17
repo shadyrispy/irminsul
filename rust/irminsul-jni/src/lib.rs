@@ -148,7 +148,7 @@ fn log_to_android(level: &str, message: &str) {
 fn load_keys() -> Result<HashMap<u16, Vec<u8>>> {
     let keys_json: HashMap<u16, String> = serde_json::from_slice(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../core/keys/gi.json"
+        "/../irminsul-core/keys/gi.json"
     )))?;
     keys_json
         .into_iter()

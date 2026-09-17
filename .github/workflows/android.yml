@@ -28,8 +28,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -44,7 +42,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            core/target
+            rust/irminsul-core/target
             rust/irminsul-jni/target
             ~/.gradle/caches
             ~/.gradle/wrapper
@@ -53,7 +51,7 @@ jobs:
       - name: Update APK version
         working-directory: app
         run: |
-          VERSION=$(grep '^version' ../core/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          VERSION=$(grep '^version' ../irminsul-core/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           VERSION_CODE=$(echo "$VERSION" | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
           sed -i "s/versionCode .*/versionCode $VERSION_CODE/" build.gradle
           sed -i "s/versionName \".*\"/versionName \"$VERSION\"/" build.gradle

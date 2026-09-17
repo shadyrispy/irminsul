@@ -11,7 +11,7 @@ path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-irminsul = { path = "../../core" }
+irminsul = { path = "../irminsul-core" }
 auto-artifactarium = { git = "https://github.com/konkers/auto-artifactarium", rev = "4ba25fac64b88970143af6bc2a2ef51338e620d0" }
 anyhow = "1.0.99"
 base64 = "0.22.1"

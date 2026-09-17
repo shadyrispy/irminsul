@@ -1,4 +1,0 @@
-[submodule "core"]
-	path = core
-	url = https://github.com/shadyrispy/irminsul-core.git
-	branch = main

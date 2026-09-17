@@ -77,7 +77,7 @@ android {
 
     // Rust library build task using cargo-ndk.
     // Builds the JNI bridge crate, which pulls the `irminsul` core in as a
-    // path dependency (core/ git submodule).
+    // path dependency (rust/irminsul-core, vendored).
     task buildRustLibs(type: Exec) {
         workingDir "${projectDir}/../rust/irminsul-jni"
         // Declare inputs so Gradle re-runs cargo when sources change; without
@@ -85,9 +85,9 @@ android {
         inputs.dir "${projectDir}/../rust/irminsul-jni/src"
         inputs.file "${projectDir}/../rust/irminsul-jni/Cargo.toml"
         inputs.file "${projectDir}/../rust/irminsul-jni/Cargo.lock"
-        inputs.dir "${projectDir}/../core/src"
-        inputs.file "${projectDir}/../core/Cargo.toml"
-        inputs.file "${projectDir}/../core/build.rs"
+        inputs.dir "${projectDir}/../rust/irminsul-core/src"
+        inputs.file "${projectDir}/../rust/irminsul-core/Cargo.toml"
+        inputs.file "${projectDir}/../rust/irminsul-core/build.rs"
         // Respect the inherited PATH (e.g. injected by `mise exec` or a
         // cargo-ndk shim) and only fall back to ~/.cargo/bin as a safety net,
         // so mise-managed toolchains take priority over a local ~/.cargo.

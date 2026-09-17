@@ -9,4 +9,5 @@ app/release.keystore
 .DS_Store
 .kotlin/
 rust/irminsul-jni/target/
+rust/irminsul-core/target/
 rust/irminsul-jni/.cargo.disabled-local-patch/

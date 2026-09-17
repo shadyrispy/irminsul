@@ -1,0 +1,40 @@
+[package]
+name = "irminsul"
+version = "0.2.1"
+authors = ["Konkers <konkers@konkers.net>"]
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+name = "irminsul"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+anime-game-data = { git = "https://github.com/konkers/anime-game-data", rev = "dfc03cdb5e27807a876b8d4dff17b3f67a320f5c" }
+auto-artifactarium = { git = "https://github.com/konkers/auto-artifactarium", rev = "4ba25fac64b88970143af6bc2a2ef51338e620d0" }
+anyhow = "1.0.99"
+chrono = "0.4.42"
+flate2 = "1.1.9"
+indexmap = "2.11.1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.143", features = ["alloc"] }
+tracing = { version = "0.1.41" }
+
+[build-dependencies]
+# build scripts run on the host, so "network" is always available here
+anime-game-data = { git = "https://github.com/konkers/anime-game-data", rev = "dfc03cdb5e27807a876b8d4dff17b3f67a320f5c", features = ["network"] }
+flate2 = "1.1.9"
+tokio = { version = "1.47.1", features = [
+	"rt",
+	"tokio-macros",
+	"macros",
+	"rt-multi-thread",
+] }
+
+[profile.release]
+opt-level = 2
+
+# Optimize all dependencies even in debug builds:
+[profile.dev.package."*"]
+opt-level = 2
