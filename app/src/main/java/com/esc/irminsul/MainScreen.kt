@@ -332,7 +332,7 @@ fun HeaderSection() {
             fontSize = 44.sp,
             fontWeight = FontWeight.ExtraBold,
             fontFamily = FontFamily.Serif,
-            color = TextPrimary,
+            color = Color.White,
             letterSpacing = 3.sp,
             textAlign = TextAlign.Center
         )
@@ -340,7 +340,7 @@ fun HeaderSection() {
         Text(
             text = stringResource(R.string.app_description),
             fontSize = 13.sp,
-            color = TextHint,
+            color = Color(0xFFB8C5D6),
             letterSpacing = 2.sp,
             textAlign = TextAlign.Center
         )
@@ -599,15 +599,7 @@ fun DataStatItem(stat: DataStat) {
 }
 
 @Composable
-fun ExportSection(
-    title: String,
-    subtitle: String,
-    canExport: Boolean,
-    fakeInitializeEnabled: Boolean,
-    onCopy: () -> Unit,
-    onDownload: () -> Unit,
-    onSettings: () -> Unit
-) {
+fun PanelCard(content: @Composable () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -617,6 +609,21 @@ fun ExportSection(
         ),
         shape = RoundedCornerShape(24.dp)
     ) {
+        content()
+    }
+}
+
+@Composable
+fun ExportSection(
+    title: String,
+    subtitle: String,
+    canExport: Boolean,
+    fakeInitializeEnabled: Boolean,
+    onCopy: () -> Unit,
+    onDownload: () -> Unit,
+    onSettings: () -> Unit
+) {
+    PanelCard {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -765,15 +772,7 @@ fun AchievementExportSection(
     onDownload: () -> Unit,
     onSettings: () -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, Border.copy(alpha = 0.25f), RoundedCornerShape(24.dp)),
-        colors = CardDefaults.cardColors(
-            containerColor = Surface.copy(alpha = 0.92f)
-        ),
-        shape = RoundedCornerShape(24.dp)
-    ) {
+    PanelCard {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -859,197 +858,6 @@ fun AchievementExportSection(
                     isPrimary = true
                 )
             }
-        }
-    }
-}
-
-@Composable
-fun ExportHistorySection(
-    history: List<LocalStorage.ExportRecord>,
-    onClear: () -> Unit,
-    onDelete: (String) -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, Border.copy(alpha = 0.25f), RoundedCornerShape(24.dp)),
-        colors = CardDefaults.cardColors(
-            containerColor = Surface.copy(alpha = 0.92f)
-        ),
-        shape = RoundedCornerShape(24.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_log),
-                        contentDescription = null,
-                        tint = Accent,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = stringResource(R.string.export_history),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TextPrimary
-                    )
-                }
-
-                if (history.isNotEmpty()) {
-                    TextButton(
-                        onClick = onClear,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.clear_all),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Error
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            if (history.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(SurfaceLight),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_download),
-                                contentDescription = null,
-                                tint = TextHint,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = stringResource(R.string.no_export_history),
-                            fontSize = 14.sp,
-                            color = TextHint
-                        )
-                    }
-                }
-            } else {
-                Column {
-                    history.forEachIndexed { index, record ->
-                        HistoryItem(
-                            record = record,
-                            onDelete = { onDelete(record.id) }
-                        )
-                        if (index < history.size - 1) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(1.dp)
-                                    .background(Border.copy(alpha = 0.2f))
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun HistoryItem(
-    record: LocalStorage.ExportRecord,
-    onDelete: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (record.success) Success.copy(alpha = 0.18f) else Error.copy(alpha = 0.18f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                painter = painterResource(
-                    id = if (record.success) R.drawable.ic_check else R.drawable.ic_error
-                ),
-                contentDescription = null,
-                tint = if (record.success) Success else Error,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-
-        Spacer(modifier = Modifier.width(14.dp))
-
-        Column(
-            modifier = Modifier.weight(1f)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = record.type,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(SurfaceLight)
-                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = record.format,
-                        fontSize = 11.sp,
-                        color = TextSecondary
-                    )
-                }
-            }
-            Text(
-                text = formatTimestamp(record.timestamp),
-                fontSize = 12.sp,
-                color = TextHint
-            )
-        }
-
-        IconButton(
-            onClick = onDelete,
-            modifier = Modifier.size(32.dp)
-        ) {
-            Icon(
-                painter = painterResource(id = R.drawable.ic_trash),
-                contentDescription = "Delete",
-                tint = Error.copy(alpha = 0.7f),
-                modifier = Modifier.size(18.dp)
-            )
         }
     }
 }

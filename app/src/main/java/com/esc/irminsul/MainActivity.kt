@@ -94,9 +94,7 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         setContent {
-            // Capture screen still hardcodes its dark palette; until it is
-            // tokenized onto MaterialTheme the app locks to the dark scheme.
-            IrminsulTheme(darkTheme = true) {
+            IrminsulTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
