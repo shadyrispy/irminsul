@@ -16,7 +16,7 @@
 
     <application>
         <service
-            android:name="com.esc.irminsul.CaptureService"
+            android:name="com.esc.irminsul.capture.internal.CaptureService"
             android:exported="false"
             android:foregroundServiceType="specialUse"
             android:permission="android.permission.BIND_VPN_SERVICE">

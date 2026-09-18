@@ -50,7 +50,7 @@ static void *capture_thread_func(void *arg) {
 }
 
 JNIEXPORT void JNICALL
-Java_com_esc_irminsul_CaptureService_nativeRunPacketLoop(
+Java_com_esc_irminsul_capture_internal_CaptureService_nativeRunPacketLoop(
         JNIEnv *env, jobject thiz, jint tunfd) {
     JavaVM *java_vm = NULL;
     (*env)->GetJavaVM(env, &java_vm);
@@ -78,7 +78,7 @@ Java_com_esc_irminsul_CaptureService_nativeRunPacketLoop(
 }
 
 JNIEXPORT void JNICALL
-Java_com_esc_irminsul_CaptureService_nativeStopCapture(
+Java_com_esc_irminsul_capture_internal_CaptureService_nativeStopCapture(
         JNIEnv *env, jobject thiz) {
     __android_log_print(ANDROID_LOG_INFO, TAG, "Stopping capture");
 
@@ -89,7 +89,7 @@ Java_com_esc_irminsul_CaptureService_nativeStopCapture(
 }
 
 JNIEXPORT void JNICALL
-Java_com_esc_irminsul_CaptureService_nativeSetDnsServer(
+Java_com_esc_irminsul_capture_internal_CaptureService_nativeSetDnsServer(
         JNIEnv *env, jobject thiz, jstring dns_ip, jint dns_port, jint ipver) {
     if (!dns_ip) return;
 

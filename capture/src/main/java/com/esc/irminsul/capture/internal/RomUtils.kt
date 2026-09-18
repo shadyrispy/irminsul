@@ -1,4 +1,4 @@
-package com.esc.irminsul
+package com.esc.irminsul.capture.internal
 
 import android.content.Context
 import android.content.Intent
@@ -7,7 +7,7 @@ import android.os.Build
 import android.provider.Settings
 import android.util.Log
 
-object RomUtils {
+internal object RomUtils {
     private const val TAG = "RomUtils"
 
     enum class RomType {

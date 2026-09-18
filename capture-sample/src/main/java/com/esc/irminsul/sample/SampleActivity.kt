@@ -11,8 +11,9 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import com.esc.irminsul.DataStatus
-import com.esc.irminsul.DataStatusSink
+import com.esc.irminsul.capture.DataStatus
+import com.esc.irminsul.capture.DataStatusSink
+import com.esc.irminsul.capture.InitResult
 import com.esc.irminsul.capture.IrminsulCapture
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -41,7 +42,9 @@ class SampleActivity : ComponentActivity() {
 
     private val vpnConsent =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK || IrminsulCapture.hasVpnPermission(this)) {
+            if (result.resultCode == RESULT_OK ||
+                IrminsulCapture.refreshPermissions(this).vpnPermissionGranted
+            ) {
                 startCapture()
             } else {
                 append("VPN consent declined")
@@ -53,8 +56,8 @@ class SampleActivity : ComponentActivity() {
         setContentView(buildLayout())
 
         append(
-            when (IrminsulCapture.initNative()) {
-                0 -> "native sniffer ready"
+            when (IrminsulCapture.initNative(this)) {
+                InitResult.Ready -> "native sniffer ready"
                 else -> "native library unavailable — parsing disabled"
             }
         )
@@ -89,11 +92,16 @@ class SampleActivity : ComponentActivity() {
     }
 
     private fun requestThenStart() {
-        IrminsulCapture.vpnPermissionIntent(this)?.let { vpnConsent.launch(it) } ?: startCapture()
+        IrminsulCapture.vpnConsentIntent(this)?.let { vpnConsent.launch(it) } ?: startCapture()
     }
 
     private fun startCapture() {
-        IrminsulCapture.start(applicationContext, statusSink)
+        // A host that shows its own UI does not want the library's notification.
+        IrminsulCapture.start(
+            applicationContext,
+            statusSink,
+            IrminsulCapture.Config(completionNotification = false)
+        )
         toggleButton.text = "Stop capture"
         append("capture started")
     }

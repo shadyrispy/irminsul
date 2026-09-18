@@ -12,33 +12,53 @@ decryption and proto parsing, arm64-v8a only).
 ./gradlew :capture:publishToMavenLocal     # or publishReleasePublicationTo<repo>
 ```
 
-Produces `com.esc.irminsul:capture:1.1.0`.
+Produces `com.esc.irminsul:capture:1.2.0`.
 
 ## Integrate
 
 ```kotlin
-dependencies { implementation("com.esc.irminsul:capture:1.1.0") }
+dependencies { implementation("com.esc.irminsul:capture:1.2.0") }
 ```
 
+The public interface is the `com.esc.irminsul.capture` package; everything else
+is `internal` (see `docs/adr/0001`).
+
 ```kotlin
-IrminsulCapture.initNative()                        // once, at startup
+IrminsulCapture.initNative(context)                       // InitResult.Ready | NotInstalled | Failed
 
 val sink = object : DataStatusSink {
     override fun publish(status: DataStatus) { /* chars/artifacts/weapons/achievements */ }
 }
 
-IrminsulCapture.vpnPermissionIntent(context)        // null if already granted
-    ?.let { consentLauncher.launch(it) }            // start after RESULT_OK
+// Permissions: ask the module what is missing, let it open the right page.
+val blocked = IrminsulCapture.refreshPermissions(context)   // also StateFlow<PermissionSnapshot>
+if (!blocked.vpnPermissionGranted) {
+    IrminsulCapture.vpnConsentIntent(context)?.let { launcher.launch(it) }
+}
+IrminsulCapture.openFixSettings(context, PermissionKind.Notifications)  // ROM chain resolved inside
 
-IrminsulCapture.start(context.applicationContext, sink)
-IrminsulCapture.stop(context.applicationContext)
+IrminsulCapture.start(applicationContext, sink)             // Config(completionNotification = false) for hosts with their own UI
+IrminsulCapture.abortStart()                                // consent declined
+IrminsulCapture.stop(applicationContext)
+IrminsulCapture.close()
 
-IrminsulCapture.isCapturing: StateFlow<Boolean>
 IrminsulCapture.packets.records: StateFlow<List<PacketRecord>>   // ring buffer, newest last
-IrminsulCapture.importPcap(path)                   // replay a saved capture
+IrminsulCapture.isCapturing / logs / completion / permissions
+IrminsulCapture.importPcap(path)                        // replay a saved capture
+IrminsulCapture.commandBody(packetId, commandIndex)     // full proto body JSON, on demand
+IrminsulCapture.exportGood(settingsJson) / exportAchievements(format)
 ```
 
-`capture-sample/` is a working host that consumes the published coordinates.
+`capture-sample/` is a working host that consumes the published coordinates —
+it is built against the AAR from mavenLocal, never against the source project.
+
+## Build-time guarantees
+
+`verifyNativeSymbols` (finalises `:capture:assembleDebug`) runs `llvm-nm` over
+the merged native libs and fails if either `.so` is missing or a JNI symbol
+Kotlin declares is not exported. Kotlin names `external fun`s by package and
+class, while C and Rust export them as literal strings, so a one-sided rename
+would otherwise only surface as a runtime `UnsatisfiedLinkError`.
 
 ## Constraints
 

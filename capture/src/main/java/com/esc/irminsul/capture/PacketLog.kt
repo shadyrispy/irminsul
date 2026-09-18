@@ -1,4 +1,4 @@
-package com.esc.irminsul
+package com.esc.irminsul.capture
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

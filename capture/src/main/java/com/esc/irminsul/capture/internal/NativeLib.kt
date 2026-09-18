@@ -1,8 +1,8 @@
-package com.esc.irminsul
+package com.esc.irminsul.capture.internal
 
 import android.util.Log
 
-object NativeLib {
+internal object NativeLib {
     private const val TAG = "NativeLib"
     private var libraryLoaded = false
     private var libraryLoadAttempted = false

@@ -1,6 +1,10 @@
-package com.esc.irminsul
-
+package com.esc.irminsul.capture.internal
 import android.util.Log
+import com.esc.irminsul.capture.DataStatus
+import com.esc.irminsul.capture.DataStatusSink
+import com.esc.irminsul.capture.PacketLog
+import com.esc.irminsul.capture.PacketRecord
+
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -8,9 +12,9 @@ import java.util.concurrent.BlockingQueue
 import org.json.JSONObject
 
 /** A raw L7 packet with the wall-clock time it was seen (live) or captured (pcap). */
-class RawPacket(val data: ByteArray, val timestampMillis: Long)
+internal class RawPacket(val data: ByteArray, val timestampMillis: Long)
 
-class PacketProcessor(
+internal class PacketProcessor(
     private val dataStore: DataStatusSink,
     private val packetLog: PacketLog,
     private val packetQueue: BlockingQueue<RawPacket>,

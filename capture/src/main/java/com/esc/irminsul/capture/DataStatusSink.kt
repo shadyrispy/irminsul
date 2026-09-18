@@ -1,4 +1,4 @@
-package com.esc.irminsul
+package com.esc.irminsul.capture
 
 /**
  * Receives player-data status updates derived from captured packets. The

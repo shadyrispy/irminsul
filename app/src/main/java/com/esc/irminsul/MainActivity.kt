@@ -1,5 +1,6 @@
 package com.esc.irminsul
 
+import com.esc.irminsul.capture.IrminsulCapture
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -60,14 +61,8 @@ class MainActivity : ComponentActivity() {
             checkNotificationPermissionAndStartCapture()
         } else {
             viewModel.addLog("VPN permission denied")
-            CaptureStatus.updateCapturingStatus(false)
+            IrminsulCapture.abortStart()
         }
-    }
-
-    private val batteryOptimizationLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        viewModel.recheckPermissions()
     }
 
     private val pcapFileLauncher = registerForActivityResult(
@@ -103,7 +98,6 @@ class MainActivity : ComponentActivity() {
                         MainScreen(
                         viewModel = viewModel,
                         vpnPermissionLauncher = vpnPermissionLauncher,
-                        batteryOptimizationLauncher = batteryOptimizationLauncher,
                         notificationPermissionLauncher = notificationPermissionLauncher,
                         onToggleCapture = {
                             viewModel.toggleCapture(captureVpnPermissionLauncher) {

@@ -1,4 +1,4 @@
-package com.esc.irminsul
+package com.esc.irminsul.capture.internal
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-object CaptureStatus {
+internal object CaptureStatus {
     private const val TAG = "CaptureStatus"
 
     private val _isCapturing = MutableStateFlow(false)
@@ -110,6 +110,12 @@ private fun launchIntentFor(context: Context): Intent =
         )
         ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
 
+/**
+ * Instantiated by the framework from the manifest, and its
+ * `onPacketCaptured` / `onCaptureStats` / `protectSocket` members are looked up
+ * by name from libcapture, so this class and those members cannot be `internal`
+ * (Kotlin mangles internal member names, which would break the lookup).
+ */
 class CaptureService : VpnService() {
 
     companion object {
@@ -145,16 +151,16 @@ class CaptureService : VpnService() {
         private var _packetQueue: LinkedBlockingQueue<RawPacket>? = null
 
         @Synchronized
-        fun setPacketQueue(queue: LinkedBlockingQueue<RawPacket>?) {
+        internal fun setPacketQueue(queue: LinkedBlockingQueue<RawPacket>?) {
             _packetQueue = queue
         }
 
         @Synchronized
-        fun offerPacket(packetData: ByteArray) {
+        internal fun offerPacket(packetData: ByteArray) {
             _packetQueue?.offer(RawPacket(packetData, System.currentTimeMillis()))
         }
 
-        val packetQueue: LinkedBlockingQueue<RawPacket>?
+        internal val packetQueue: LinkedBlockingQueue<RawPacket>?
             @Synchronized
             get() = _packetQueue
 
@@ -220,6 +226,11 @@ class CaptureService : VpnService() {
             } catch (e: SecurityException) {
                 Log.e(TAG, "Failed to post notification - permission missing?", e)
             }
+        }
+
+        fun cancelCompletionNotification(context: Context) {
+            val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            manager.cancel(NOTIFICATION_ID_COMPLETE)
         }
     }
 

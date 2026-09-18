@@ -1,4 +1,4 @@
-package com.esc.irminsul
+package com.esc.irminsul.capture
 
 /** Progress of the player-data collection derived from captured packets. */
 data class DataStatus(

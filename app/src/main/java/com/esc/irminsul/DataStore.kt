@@ -1,5 +1,8 @@
 package com.esc.irminsul
 
+import com.esc.irminsul.capture.IrminsulCapture
+import com.esc.irminsul.capture.DataStatusSink
+import com.esc.irminsul.capture.DataStatus
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,14 +58,14 @@ class DataStore : DataStatusSink {
 
     fun exportGood(settings: ExportSettings = ExportSettings()): Pair<String, ExportStats> {
         val settingsJson = settingsToJson(settings)
-        val json = NativeLib.exportGood(settingsJson)
+        val json = IrminsulCapture.exportGood(settingsJson)
             ?: throw RuntimeException("Failed to export GOOD format from native library")
         val stats = parseExportStats(json, settings)
         return Pair(json, stats)
     }
 
     fun exportAchievements(formatCode: Int): String {
-        return NativeLib.exportAchievements(formatCode)
+        return IrminsulCapture.exportAchievements(formatCode)
             ?: throw RuntimeException("Failed to export achievements from native library")
     }
 

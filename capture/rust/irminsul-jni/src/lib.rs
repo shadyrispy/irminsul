@@ -1,7 +1,8 @@
 //! JNI bridge between the Android app and the `irminsul` core crate.
 //!
 //! Built with `cargo ndk -t arm64-v8a build --release` from this directory;
-//! the resulting `libirminsul.so` is copied into `app/src/main/jniLibs`.
+//! the resulting `libirminsul.so` is copied into the `capture` module's
+//! `src/main/jniLibs`.
 
 pub mod achievements;
 pub mod uiaf;
@@ -128,7 +129,7 @@ fn log_to_android(level: &str, message: &str) {
         if let Ok(mut env) = vm.attach_current_thread() {
             let msg_str = format!("[{}] {}", level, message);
             if let Ok(msg) = env.new_string(&msg_str) {
-                if let Ok(class) = env.find_class("com/esc/irminsul/NativeLib") {
+                if let Ok(class) = env.find_class("com/esc/irminsul/capture/internal/NativeLib") {
                     let _ = env.call_static_method(
                         class,
                         "log",
@@ -241,7 +242,7 @@ fn parse_export_settings(json: &str) -> ExportSettings {
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeInitLogging(
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeInitLogging(
     env: JNIEnv,
     _class: JClass,
 ) {
@@ -259,7 +260,7 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeInitLogging(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeCreateSniffer(
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeCreateSniffer(
     _env: JNIEnv,
     _class: JClass,
 ) -> jint {
@@ -314,7 +315,7 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeCreateSniffe
 /// `NativeLib.onDataComplete(artifactCount, weaponCount, materialCount,
 ///                            characterCount, achievementCount)`.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeProcessPacket(
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeProcessPacket(
     mut env: JNIEnv,
     _class: JClass,
     packet_data: JByteArray,
@@ -442,7 +443,7 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeProcessPacke
 /// null when the packet has been evicted from the cache or the index is out
 /// of range.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeCommandBody(
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeCommandBody(
     env: JNIEnv,
     _class: JClass,
     packet_id: jlong,
@@ -480,7 +481,7 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeCommandBody(
 /// Export GOOD v3 JSON with optional settings.
 /// If `settings_json` is null, uses default settings.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeExportGood(
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeExportGood(
     mut env: JNIEnv,
     _class: JClass,
     settings_json: jstring,
@@ -525,7 +526,7 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeExportGood(
 /// Export achievements in the specified format.
 /// `format_code`: 0 = UIAF, 1 = Seelie, 2 = CSV
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeExportAchievements(
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeExportAchievements(
     env: JNIEnv,
     _class: JClass,
     format_code: jint,
@@ -567,7 +568,7 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeExportAchiev
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeDestroySniffer(
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeDestroySniffer(
     _env: JNIEnv,
     _class: JClass,
 ) {
@@ -593,7 +594,7 @@ fn notify_data_complete(
     character_count: usize,
     achievement_count: usize,
 ) {
-    if let Ok(class) = env.find_class("com/esc/irminsul/NativeLib") {
+    if let Ok(class) = env.find_class("com/esc/irminsul/capture/internal/NativeLib") {
         let _ = env.call_static_method(
             class,
             "onDataComplete",

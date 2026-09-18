@@ -1,5 +1,6 @@
 package com.esc.irminsul.ui
 
+import com.esc.irminsul.capture.PacketRecord
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,7 +43,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.esc.irminsul.MainViewModel
-import com.esc.irminsul.PacketRecord
 import com.esc.irminsul.R
 import java.text.SimpleDateFormat
 import java.util.Locale

@@ -1,5 +1,6 @@
 package com.esc.irminsul.ui
 
+import com.esc.irminsul.capture.IrminsulCapture
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -36,7 +37,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.esc.irminsul.MainViewModel
-import com.esc.irminsul.NativeLib
 import com.esc.irminsul.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -64,7 +64,7 @@ fun PacketDetailScreen(
     var unavailable by remember { mutableStateOf(false) }
 
     LaunchedEffect(packetId, commandIndex) {
-        val json = withContext(Dispatchers.IO) { NativeLib.commandBody(packetId, commandIndex) }
+        val json = withContext(Dispatchers.IO) { IrminsulCapture.commandBody(packetId, commandIndex) }
         if (json == null) {
             unavailable = true
         } else {

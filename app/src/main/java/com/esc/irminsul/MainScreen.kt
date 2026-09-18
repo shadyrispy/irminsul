@@ -1,5 +1,6 @@
 package com.esc.irminsul
 
+import com.esc.irminsul.capture.PermissionSnapshot
 import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedContent
@@ -86,7 +87,6 @@ import java.util.Locale
 fun MainScreen(
     viewModel: MainViewModel,
     vpnPermissionLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>,
-    batteryOptimizationLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>,
     notificationPermissionLauncher: androidx.activity.result.ActivityResultLauncher<String>,
     onToggleCapture: () -> Unit,
     onOpenPcapFile: () -> Unit,
@@ -196,7 +196,7 @@ fun MainScreen(
                 onOpenChannelSettings = { viewModel.openChannelSettings() },
                 onOpenAutoStartSettings = { viewModel.openAutoStartSettings() },
                 onRequestVpnPermission = { viewModel.requestVpnPermission(vpnPermissionLauncher) },
-                onOpenBatterySettings = { viewModel.openBatteryOptimizationSettings(batteryOptimizationLauncher) },
+                onOpenBatterySettings = { viewModel.openBatteryOptimizationSettings() },
                 onTestNotification = { viewModel.testHeadsUpNotification() },
                 onRecheck = { viewModel.recheckPermissions() },
                 onDismiss = { viewModel.dismissPermissionDialog() }
@@ -1031,7 +1031,7 @@ fun LaunchGameDialog(
 
 @Composable
 fun PermissionSetupDialog(
-    permissionState: PermissionHelper.PermissionState,
+    permissionState: PermissionSnapshot,
     onOpenNotificationSettings: () -> Unit,
     onOpenChannelSettings: () -> Unit,
     onOpenAutoStartSettings: () -> Unit,
@@ -1171,7 +1171,7 @@ fun PermissionSetupDialog(
                 }
 
                 // ROM-specific tips
-                val romTips = RomUtils.getRomPermissionTips()
+                val romTips = permissionState.romHint
                 if (romTips.isNotEmpty()) {
                     Box(
                         modifier = Modifier

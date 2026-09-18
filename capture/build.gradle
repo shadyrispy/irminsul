@@ -99,6 +99,67 @@ android {
     preBuild.dependsOn buildRustLibs
 }
 
+// The shipped native libraries are part of this module's interface: Kotlin
+// declares each `external fun` by package + class name while C and Rust export
+// it by literal name. A one-sided rename compiles, links, and then fails at
+// runtime with UnsatisfiedLinkError, so assert the pair on every build.
+def nativeSymbols = [
+    'libirminsul.so': [
+        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeInitLogging',
+        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeCreateSniffer',
+        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeProcessPacket',
+        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeCommandBody',
+        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeExportGood',
+        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeExportAchievements',
+        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeDestroySniffer',
+    ],
+    'libcapture.so': [
+        'Java_com_esc_irminsul_capture_internal_CaptureService_nativeRunPacketLoop',
+        'Java_com_esc_irminsul_capture_internal_CaptureService_nativeStopCapture',
+        'Java_com_esc_irminsul_capture_internal_CaptureService_nativeSetDnsServer',
+    ],
+]
+
+def nmHost = System.getProperty('os.name').toLowerCase().contains('mac') ? 'darwin-x86_64'
+    : (System.getProperty('os.name').toLowerCase().contains('windows') ? 'windows-x86_64' : 'linux-x86_64')
+
+tasks.register('verifyNativeSymbols') {
+    group = 'verification'
+    description = 'Checks that every JNI symbol Kotlin declares is exported by the matching .so.'
+    def merged = layout.buildDirectory.dir('intermediates/merged_native_libs/debug/out/lib/arm64-v8a')
+    def nmTool = file("${android.ndkDirectory}/toolchains/llvm/prebuilt/${nmHost}/bin/llvm-nm")
+    inputs.dir(merged)
+    doLast {
+        def problems = []
+        nativeSymbols.each { lib, symbols ->
+            def so = new File(merged.get().asFile, lib)
+            if (!so.exists()) {
+                problems << "expected $lib in the merged native libs but it is absent"
+                return
+            }
+            def out = providers.exec {
+                commandLine nmTool.absolutePath, '-g', '--defined-only', so.absolutePath
+            }.standardOutput.asText.get()
+            symbols.each { sym ->
+                if (!out.contains(sym)) problems << "$lib does not export $sym"
+            }
+        }
+        if (problems) {
+            throw new GradleException(
+                "Native symbol check failed — a Kotlin/native rename was not done in lockstep:\n  " +
+                    problems.join("\n  ")
+            )
+        }
+        logger.lifecycle("Native symbols verified: ${nativeSymbols.values().sum { it.size() }} exports in ${nativeSymbols.size()} libs")
+    }
+}
+
+// Variant tasks are created after evaluation, so match by name instead of
+// resolving them eagerly.
+tasks.matching { it.name == 'assembleDebug' }.configureEach {
+    finalizedBy 'verifyNativeSymbols'
+}
+
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
@@ -114,7 +175,7 @@ afterEvaluate {
                 from components.release
                 groupId = 'com.esc.irminsul'
                 artifactId = 'capture'
-                version = '1.1.0'
+                version = '1.2.0'
                 pom {
                     name = 'Irminsul Capture'
                     description = 'Genshin packet capture, decryption and protobuf ' +

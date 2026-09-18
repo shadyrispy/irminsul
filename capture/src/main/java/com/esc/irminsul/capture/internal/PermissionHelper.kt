@@ -1,15 +1,19 @@
-package com.esc.irminsul
+package com.esc.irminsul.capture.internal
 
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import com.esc.irminsul.capture.PermissionKind
+import com.esc.irminsul.capture.R
 
-object PermissionHelper {
+internal object PermissionHelper {
 
     /**
      * @param requiredGranted 必须权限是否全部通过（通知+悬浮通知+VPN）
@@ -31,6 +35,7 @@ object PermissionHelper {
     }
 
     fun checkPermissions(context: Context): PermissionState {
+        ensureCompletionChannel(context)
         val notificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -120,5 +125,52 @@ object PermissionHelper {
     fun getAppNotificationSettingsIntent(context: Context): Intent {
         return Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
             .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+    }
+    /** ROM-specific guidance for the permission dialog; empty on stock Android. */
+    fun romHint(): String = RomUtils.getRomPermissionTips()
+
+    /**
+     * The heads-up check is meaningless until the completion channel exists, so
+     * create it up front with the importance it is expected to have.
+     */
+    private fun ensureCompletionChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            ?: return
+        if (manager.getNotificationChannel(CaptureService.NOTIFICATION_CHANNEL_COMPLETE_ID) != null) return
+        val channel = NotificationChannel(
+            CaptureService.NOTIFICATION_CHANNEL_COMPLETE_ID,
+            context.getString(R.string.notification_channel_complete_name),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = context.getString(R.string.notification_channel_complete_desc)
+            setShowBadge(true)
+            enableLights(true)
+            lightColor = Color.GREEN
+        }
+        manager.createNotificationChannel(channel)
+    }
+
+    /**
+     * Ordered settings pages that can grant [kind], best guess first. The
+     * ROM-specific variants come before the stock Android ones so a host never
+     * has to know which vendor it is running on.
+     */
+    fun fixIntents(context: Context, kind: PermissionKind): List<Intent> {
+        val details = listOf(getAppDetailsSettingsIntent(context))
+        return when (kind) {
+            PermissionKind.Notifications ->
+                listOfNotNull(RomUtils.getNotificationSettingsIntent(context)) +
+                    listOf(getAppNotificationSettingsIntent(context)) + details
+            PermissionKind.HeadsUp ->
+                listOf(
+                    getChannelSettingsIntent(context, CaptureService.NOTIFICATION_CHANNEL_COMPLETE_ID),
+                    getAppNotificationSettingsIntent(context)
+                ) + details
+            PermissionKind.Vpn -> listOfNotNull(getVpnPermissionIntent(context))
+            PermissionKind.BatteryOptimization -> listOf(getBatteryOptimizationIntent(context))
+            PermissionKind.AutoStart -> listOfNotNull(getAutoStartSettingsIntent(context)) + details
+            PermissionKind.AppDetails -> details
+        }
     }
 }
