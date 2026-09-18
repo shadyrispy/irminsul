@@ -462,6 +462,7 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_NativeLib_nativeCommandBody(
         command_id: cached.command_id,
         header_len: cached.header_len,
         data_len: cached.proto_data.len() as u32,
+        ext_header: Vec::new(),
         proto_data: cached.proto_data.clone(),
         direction: cached.direction,
     };
