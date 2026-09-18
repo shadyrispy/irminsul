@@ -298,8 +298,8 @@ fun HeaderCard(backgroundBitmap: ImageBitmap?) {
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color(0x660D1B2A),
-                                Color(0xDD0D1B2A)
+                                Background.copy(alpha = 0.40f),
+                                Background.copy(alpha = 0.87f)
                             )
                         )
                     )
@@ -308,7 +308,7 @@ fun HeaderCard(backgroundBitmap: ImageBitmap?) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFF0D1B2A))
+                    .background(SurfaceHighlight)
             )
         }
         Column(
@@ -332,7 +332,7 @@ fun HeaderSection() {
             fontSize = 44.sp,
             fontWeight = FontWeight.ExtraBold,
             fontFamily = FontFamily.Serif,
-            color = Color.White,
+            color = TextPrimary,
             letterSpacing = 3.sp,
             textAlign = TextAlign.Center
         )
@@ -340,7 +340,7 @@ fun HeaderSection() {
         Text(
             text = stringResource(R.string.app_description),
             fontSize = 13.sp,
-            color = Color(0xFFB8C5D6),
+            color = TextSecondary,
             letterSpacing = 2.sp,
             textAlign = TextAlign.Center
         )
@@ -371,8 +371,8 @@ fun CaptureCard(
             .fillMaxWidth()
             .shadow(
                 elevation = if (isCapturing) 25.dp else 16.dp,
-                spotColor = if (isCapturing) Color(0x50FF6B6B) else Color(0x3000B4D8),
-                ambientColor = if (isCapturing) Color(0x20FF6B6B) else Color(0x1500B4D8)
+                spotColor = if (isCapturing) Error.copy(alpha = 0.31f) else ButtonPrimary.copy(alpha = 0.19f),
+                ambientColor = if (isCapturing) Error.copy(alpha = 0.13f) else ButtonPrimary.copy(alpha = 0.08f)
             )
             .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         colors = CardDefaults.cardColors(
@@ -583,6 +583,7 @@ fun DataStatItem(stat: DataStat) {
                     text = if (isLoaded) stat.count.toString() else "-",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
                     color = if (isLoaded) Success else TextHint
                 )
                 Spacer(modifier = Modifier.height(2.dp))

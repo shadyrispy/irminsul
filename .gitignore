@@ -11,3 +11,5 @@ app/release.keystore
 rust/irminsul-jni/target/
 rust/irminsul-core/target/
 rust/irminsul-jni/.cargo.disabled-local-patch/
+design/
+rust/pcap-check/target/
