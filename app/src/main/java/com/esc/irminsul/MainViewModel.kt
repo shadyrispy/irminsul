@@ -1,5 +1,6 @@
 package com.esc.irminsul
 
+import com.esc.irminsul.capture.R as CaptureR
 import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -251,10 +252,10 @@ class MainViewModel(private val context: Context) : ViewModel() {
             if (existing != null) return
             val channel = NotificationChannel(
                 CaptureService.NOTIFICATION_CHANNEL_COMPLETE_ID,
-                context.getString(R.string.notification_channel_complete_name),
+                context.getString(CaptureR.string.notification_channel_complete_name),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = context.getString(R.string.notification_channel_complete_desc)
+                description = context.getString(CaptureR.string.notification_channel_complete_desc)
                 setShowBadge(true)
                 enableLights(true)
                 lightColor = Color.GREEN

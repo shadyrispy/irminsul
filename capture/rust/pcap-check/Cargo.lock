@@ -76,7 +76,6 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 [[package]]
 name = "auto-artifactarium"
 version = "1.4.0"
-source = "git+https://github.com/shadyrispy/auto-artifactarium.git?branch=feat%2Fheuristic-matching#a0d05e3e9205bf81be3b0968665125fd306fe053"
 dependencies = [
  "anyhow",
  "base64",
@@ -85,6 +84,7 @@ dependencies = [
  "kcp",
  "protobuf",
  "protobuf-codegen",
+ "protobuf-parse",
  "rand_mt",
  "rsa",
  "serde_json",
@@ -1088,4 +1088,3 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[patch.unused]]
 name = "anime-game-data"
 version = "0.1.0"
-source = "git+https://github.com/shadyrispy/anime-game-data.git?branch=main#538e1dae35786fb34d23d76a22dda054858160a5"

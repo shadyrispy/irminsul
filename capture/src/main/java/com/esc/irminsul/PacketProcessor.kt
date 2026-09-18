@@ -11,7 +11,7 @@ import org.json.JSONObject
 class RawPacket(val data: ByteArray, val timestampMillis: Long)
 
 class PacketProcessor(
-    private val dataStore: DataStore,
+    private val dataStore: DataStatusSink,
     private val packetLog: PacketLog,
     private val packetQueue: BlockingQueue<RawPacket>,
     private val onDataUpdate: (items: Boolean, characters: Boolean, achievements: Boolean) -> Unit

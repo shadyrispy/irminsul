@@ -114,15 +114,6 @@
     <string name="test_notification">测试通知</string>
     <string name="go_to_settings">去系统设置</string>
 
-    <!-- Notifications -->
-    <string name="notification_channel_complete_name">Irminsul 数据解析完成</string>
-    <string name="notification_channel_complete_desc">数据解析完成时弹出强提醒，便于在后台抓包时收到通知</string>
-    <string name="notification_channel_capture_name">Irminsul 抓包</string>
-    <string name="notification_channel_capture_desc">抓包进行中的前台通知</string>
-    <string name="notification_complete_title">Irminsul - 数据解析完成</string>
-    <string name="notification_complete_content">%1$d角色 %2$d圣遗物 %3$d武器 %4$d成就</string>
-    <string name="notification_capture_connections">%1$d 连接</string>
-
     <!-- Toast Messages -->
     <string name="toast_copied_with_stats">已复制到剪贴板 (%1$s)</string>
     <string name="toast_saved_to">下载到: %1$s (%2$s)</string>

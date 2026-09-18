@@ -42,7 +42,7 @@ data class ExportSettings(
     var fakeInitialize4thLine: Boolean = false
 )
 
-class DataStore {
+class DataStore : DataStatusSink {
     companion object {
         private const val TAG = "DataStore"
         const val FORMAT_UIAF = 0
@@ -53,7 +53,7 @@ class DataStore {
     private val _dataStatus = MutableStateFlow(DataStatus())
     val dataStatus: StateFlow<DataStatus> = _dataStatus.asStateFlow()
 
-    fun updateStatus(
+    override fun updateStatus(
         itemsLoaded: Boolean,
         charactersLoaded: Boolean,
         achievementsLoaded: Boolean,

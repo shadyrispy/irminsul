@@ -16,6 +16,7 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.esc.irminsul.capture.R
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.util.concurrent.ExecutorService
@@ -95,6 +96,20 @@ object CaptureStatus {
         get() = _itemsLoaded.value && _charactersLoaded.value && _weaponsLoaded.value && _achievementsLoaded.value
 }
 
+/**
+ * Intent that brings the host app's own launcher activity to the front. The
+ * capture module cannot reference an app activity by class, so it resolves the
+ * package launcher instead.
+ */
+private fun launchIntentFor(context: Context): Intent =
+    context.packageManager.getLaunchIntentForPackage(context.packageName)
+        ?.addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+        )
+        ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+
 class CaptureService : VpnService() {
 
     companion object {
@@ -173,19 +188,13 @@ class CaptureService : VpnService() {
 
             val fullScreenPendingIntent = PendingIntent.getActivity(
                 context, 1,
-                Intent(context, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        Intent.FLAG_ACTIVITY_NEW_TASK
-                },
+                launchIntentFor(context),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
             val contentPendingIntent = PendingIntent.getActivity(
                 context, 0,
-                Intent(context, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                },
+                launchIntentFor(context),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
@@ -195,7 +204,7 @@ class CaptureService : VpnService() {
                 .setContentTitle(context.getString(R.string.notification_complete_title))
                 .setContentText(content)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(content))
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_stat_capture)
                 .setContentIntent(contentPendingIntent)
                 .setFullScreenIntent(fullScreenPendingIntent, true)
                 .setAutoCancel(true)
@@ -296,9 +305,7 @@ class CaptureService : VpnService() {
 
         builder.setSession("Irminsul")
 
-        val configureIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
+        val configureIntent = launchIntentFor(this)
         builder.setConfigureIntent(PendingIntent.getActivity(
             this, 0, configureIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -522,9 +529,7 @@ class CaptureService : VpnService() {
     private fun buildNotification(sent: Long, received: Long, connections: Int): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            },
+            launchIntentFor(this),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -535,7 +540,7 @@ class CaptureService : VpnService() {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Irminsul - $bytesStr")
             .setContentText(text)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_capture)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
             .build()
