@@ -11,6 +11,9 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.esc.irminsul.capture.DataStatus
 import com.esc.irminsul.capture.DataStatusSink
 import com.esc.irminsul.capture.InitResult
@@ -18,6 +21,7 @@ import com.esc.irminsul.capture.IrminsulCapture
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 /**
  * Minimal host app for the published `com.esc.irminsul:capture` AAR: obtains
@@ -54,6 +58,7 @@ class SampleActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(buildLayout())
+        observeCapture()
 
         append(
             when (IrminsulCapture.initNative(this)) {
@@ -67,6 +72,23 @@ class SampleActivity : ComponentActivity() {
             PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
+    }
+
+    /** The library's flows are the only source of truth for what the UI shows. */
+    private fun observeCapture() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    IrminsulCapture.isCapturing.collect {
+                        toggleButton.text = if (it) "Stop capture" else "Start capture"
+                        render()
+                    }
+                }
+                launch {
+                    IrminsulCapture.packets.records.collect { render() }
+                }
+            }
         }
     }
 
@@ -102,13 +124,11 @@ class SampleActivity : ComponentActivity() {
             statusSink,
             IrminsulCapture.Config(completionNotification = false)
         )
-        toggleButton.text = "Stop capture"
         append("capture started")
     }
 
     private fun stopCapture() {
         IrminsulCapture.stop(applicationContext)
-        toggleButton.text = "Start capture"
         append("capture stopped")
     }
 
