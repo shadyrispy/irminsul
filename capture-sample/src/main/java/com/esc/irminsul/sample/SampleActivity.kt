@@ -14,9 +14,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.esc.irminsul.capture.CaptureResult
+import com.esc.irminsul.capture.CaptureSource
 import com.esc.irminsul.capture.DataStatus
 import com.esc.irminsul.capture.DataStatusSink
-import com.esc.irminsul.capture.InitResult
 import com.esc.irminsul.capture.IrminsulCapture
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -61,9 +62,9 @@ class SampleActivity : ComponentActivity() {
         observeCapture()
 
         append(
-            when (IrminsulCapture.initNative(this)) {
-                InitResult.Ready -> "native sniffer ready"
-                else -> "native library unavailable — parsing disabled"
+            when (val init = IrminsulCapture.initNative(this)) {
+                is CaptureResult.Ok -> "native sniffer ready"
+                is CaptureResult.Err -> "capture unavailable: ${init.error}"
             }
         )
 
@@ -86,7 +87,7 @@ class SampleActivity : ComponentActivity() {
                     }
                 }
                 launch {
-                    IrminsulCapture.packets.records.collect { render() }
+                    IrminsulCapture.packets.collect { render() }
                 }
             }
         }
@@ -121,6 +122,7 @@ class SampleActivity : ComponentActivity() {
         // A host that shows its own UI does not want the library's notification.
         IrminsulCapture.start(
             applicationContext,
+            CaptureSource.Vpn,
             statusSink,
             IrminsulCapture.Config(completionNotification = false)
         )
@@ -133,8 +135,9 @@ class SampleActivity : ComponentActivity() {
     }
 
     private fun render() {
-        val decoded = IrminsulCapture.packets.records.value.size
-        val latest = IrminsulCapture.packets.records.value.lastOrNull()
+        val records = IrminsulCapture.packets.value
+        val decoded = records.size
+        val latest = records.lastOrNull()
         val s = lastStatus
         statusView.text = buildString {
             append("capturing=").append(IrminsulCapture.isCapturing.value)

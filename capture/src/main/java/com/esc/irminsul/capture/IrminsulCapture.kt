@@ -9,6 +9,7 @@ import com.esc.irminsul.capture.internal.CaptureService
 import com.esc.irminsul.capture.internal.CaptureStatus
 import com.esc.irminsul.capture.internal.NativeLib
 import com.esc.irminsul.capture.internal.PacketProcessor
+import com.esc.irminsul.capture.internal.PacketRingBuffer
 import com.esc.irminsul.capture.internal.PermissionHelper
 import com.esc.irminsul.capture.internal.RawPacket
 import java.util.concurrent.LinkedBlockingQueue
@@ -29,18 +30,27 @@ import kotlinx.coroutines.launch
  * game traffic into decoded commands.
  *
  * A host crosses exactly one seam — this object plus [DataStatus],
- * [DataStatusSink], [PacketRecord] and [PacketLog]. Everything else in the
- * module is `internal` and lives in `…capture.internal`.
+ * [DataStatusSink], [PacketRecord], [CaptureSource], [CaptureResult],
+ * [PermissionSnapshot] and [Completion]. Everything else in the module is
+ * `internal` and lives in `…capture.internal`.
  *
  * Typical flow: [initNative] once at startup, [refreshPermissions] /
- * [openFixSettings] until [PermissionKind.Vpn] is granted, then [start].
+ * [openFixSettings] until [PermissionKind.Vpn] is granted, then
+ * `start(context, CaptureSource.Vpn, sink)`.
+ *
+ * There is one capture at a time: the native sniffer is stateful (session keys,
+ * stream reassembly) and process-wide, so this is an object rather than a
+ * constructible session. Calling [start] while a session runs ends the previous
+ * one first.
  */
 object IrminsulCapture {
 
     private const val TAG = "IrminsulCapture"
 
-    /** Decoded commands, newest last. Shared ring buffer, survives [stop]. */
-    val packets: PacketLog = PacketLog()
+    private val ring = PacketRingBuffer()
+
+    /** Decoded commands, newest last. Read-only: the module is the only writer. */
+    val packets: StateFlow<List<PacketRecord>> = ring.records
 
     /** Whether the VPN capture service is running. Only the module writes it. */
     val isCapturing: StateFlow<Boolean>
@@ -50,7 +60,7 @@ object IrminsulCapture {
     private val _logs = MutableSharedFlow<String>(extraBufferCapacity = 256)
     val logs: SharedFlow<String> = _logs.asSharedFlow()
 
-    /** Set once the native stack reports all game data collected; cleared by [start]. */
+    /** Set once, when the native stack first reports all game data collected. */
     private val _completion = MutableStateFlow<Completion?>(null)
     val completion: StateFlow<Completion?> = _completion.asStateFlow()
 
@@ -62,7 +72,7 @@ object IrminsulCapture {
         val queueCapacity: Int = 10_000,
         /** Post the "all data collected" notification when the native stack reports it. */
         val completionNotification: Boolean = true,
-        /** Fired whenever items / avatars / achievements first show up. */
+        /** Fired whenever items / characters / achievements first show up. */
         val onDataUpdated: (items: Boolean, characters: Boolean, achievements: Boolean) -> Unit =
             { _, _, _ -> }
     )
@@ -106,27 +116,30 @@ object IrminsulCapture {
 
     /**
      * Loads the native library and creates the sniffer. Call once at startup;
-     * [start] will not decode anything until this reports [InitResult.Ready].
+     * [start] will not decode anything until this returns [CaptureResult.Ok].
      */
-    fun initNative(context: Context): InitResult {
+    fun initNative(context: Context): CaptureResult<Unit> {
         appContext = context.applicationContext
         NativeLib.initLogging()
-        if (!NativeLib.isAvailable()) return InitResult.NotInstalled
+        if (!NativeLib.isAvailable()) {
+            return CaptureResult.Err(CaptureError.NativeUnavailable)
+        }
         return createSniffer()
     }
 
     /** Recreates the sniffer, e.g. after clearing collected data. */
-    fun resetNative(): InitResult = createSniffer()
+    fun resetNative(): CaptureResult<Unit> = createSniffer()
 
     /** Releases the native sniffer. Pair with [initNative]. */
     fun close() {
         NativeLib.destroySniffer()
     }
 
-    private fun createSniffer(): InitResult = when (val code = NativeLib.createSniffer()) {
-        0 -> InitResult.Ready
-        else -> InitResult.Failed(code)
-    }
+    private fun createSniffer(): CaptureResult<Unit> =
+        when (val code = NativeLib.createSniffer()) {
+            0 -> CaptureResult.Ok(Unit)
+            else -> CaptureResult.Err(CaptureError.SnifferInitFailed(code))
+        }
 
     /** Re-reads every permission the flow can be blocked on. */
     fun refreshPermissions(context: Context): PermissionSnapshot {
@@ -145,14 +158,14 @@ object IrminsulCapture {
 
     /**
      * Opens the best settings page that can grant [kind], falling back through
-     * ROM-specific and stock-Android pages. Returns false when none could open.
+     * ROM-specific and stock-Android pages.
      */
-    fun openFixSettings(context: Context, kind: PermissionKind): Boolean {
+    fun openFixSettings(context: Context, kind: PermissionKind): CaptureResult<Unit> {
         for (intent in PermissionHelper.fixIntents(context, kind)) {
             try {
                 intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 context.startActivity(intent)
-                return true
+                return CaptureResult.Ok(Unit)
             } catch (e: ActivityNotFoundException) {
                 Log.d(TAG, "settings page unavailable for $kind: ${intent.component ?: intent.action}")
             } catch (e: SecurityException) {
@@ -160,71 +173,72 @@ object IrminsulCapture {
             }
         }
         Log.w(TAG, "no settings page could be opened for $kind")
-        return false
+        return CaptureResult.Err(CaptureError.NoSettingsPage)
     }
 
     /** The VPN consent intent to launch, or null when already granted. */
     fun vpnConsentIntent(context: Context): Intent? =
         PermissionHelper.getVpnPermissionIntent(context)
 
-    /** Restarts the decode pipeline with a fresh queue and an empty log. */
-    @Synchronized
-    fun startPipeline(sink: DataStatusSink, config: Config = Config()) {
-        stopPipeline()
-        this.config = config
-        _completion.value = null
-        packets.clear()
-        val queue = LinkedBlockingQueue<RawPacket>(config.queueCapacity)
-        val worker = PacketProcessor(sink, packets, queue, config.onDataUpdated)
-        processor = worker
-        CaptureService.setPacketQueue(queue)
-        worker.start()
-    }
-
-    @Synchronized
-    fun stopPipeline() {
-        processor?.stopProcessor()
-        processor = null
-        CaptureService.setPacketQueue(null)
-    }
-
-    /** Feeds a saved pcap through the current pipeline; needs [startPipeline]. */
-    fun importPcap(path: String) {
-        processor?.readPcapFile(path)
-    }
-
-    /** Starts capturing. Call once VPN consent from [vpnConsentIntent] is granted. */
-    fun start(context: Context, sink: DataStatusSink, config: Config = Config()) {
+    /**
+     * Begins a capture session from [source] and ends the previous one. Live
+     * progress arrives on [packets] and through [sink]; a session that fails
+     * after this point is reported on [logs] and by [isCapturing] going false.
+     */
+    fun start(
+        context: Context,
+        source: CaptureSource,
+        sink: DataStatusSink,
+        config: Config = Config()
+    ) {
         appContext = context.applicationContext
-        CaptureStatus.resetParsingProgress()
         startPipeline(sink, config)
-        ContextCompat.startForegroundService(
-            context,
-            Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_START)
-        )
+        when (source) {
+            CaptureSource.Vpn -> ContextCompat.startForegroundService(
+                context,
+                Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_START)
+            )
+            is CaptureSource.File -> replay(source.path)
+        }
     }
 
+    /** Stops the current session, whether it came from VPN or a pcap replay. */
     fun stop(context: Context) {
-        context.startService(
-            Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)
-        )
+        if (isCapturing.value) {
+            context.startService(
+                Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)
+            )
+        }
         stopPipeline()
     }
 
-    /** Gives up a start that never got consent; the only host-side state write. */
+    /** Gives up a start that never got consent; the only non-service state write. */
     fun abortStart() {
-        CaptureStatus.updateCapturingStatus(false)
+        CaptureStatus.setCapturing(false)
+    }
+
+    /** Drops the decoded-command list, e.g. after the host resets collected data. */
+    fun clearPackets() {
+        ring.clear()
     }
 
     /** GOOD v3 export of the collected data. `settingsJson` is the module's JSON schema. */
-    fun exportGood(settingsJson: String): String? = NativeLib.exportGood(settingsJson)
+    fun exportGood(settingsJson: String): CaptureResult<String> =
+        nativeCall { NativeLib.exportGood(settingsJson) }
 
     /** Achievement export as defined by the native export format codes. */
-    fun exportAchievements(format: Int): String? = NativeLib.exportAchievements(format)
+    fun exportAchievements(format: Int): CaptureResult<String> =
+        nativeCall { NativeLib.exportAchievements(format) }
 
-    /** Full proto body JSON for one decoded command, or null if it is gone. */
-    fun commandBody(packetId: Long, commandIndex: Int): String? =
-        NativeLib.commandBody(packetId, commandIndex)
+    /** Full proto body JSON for one decoded command. */
+    fun commandBody(packetId: Long, commandIndex: Int): CaptureResult<String> {
+        if (!NativeLib.isAvailable()) {
+            return CaptureResult.Err(CaptureError.NativeUnavailable)
+        }
+        val body = NativeLib.commandBody(packetId, commandIndex)
+            ?: return CaptureResult.Err(CaptureError.PayloadUnavailable)
+        return CaptureResult.Ok(body)
+    }
 
     /** Posts the completion notification with sample counts, for testing heads-up. */
     fun showCompletionPreview(context: Context) {
@@ -232,6 +246,41 @@ object IrminsulCapture {
         scope.launch {
             delay(5_000)
             CaptureService.cancelCompletionNotification(context)
+        }
+    }
+
+    private fun nativeCall(call: () -> String?): CaptureResult<String> = when {
+        !NativeLib.isAvailable() -> CaptureResult.Err(CaptureError.NativeUnavailable)
+        else -> call()?.let { CaptureResult.Ok(it) }
+            ?: CaptureResult.Err(CaptureError.NativeRefused)
+    }
+
+    @Synchronized
+    private fun startPipeline(sink: DataStatusSink, config: Config) {
+        stopPipeline()
+        this.config = config
+        _completion.value = null
+        ring.clear()
+        val queue = LinkedBlockingQueue<RawPacket>(config.queueCapacity)
+        val worker = PacketProcessor(sink, ring, queue, config.onDataUpdated)
+        processor = worker
+        CaptureService.setPacketQueue(queue)
+        worker.start()
+    }
+
+    @Synchronized
+    private fun stopPipeline() {
+        processor?.stopProcessor()
+        processor = null
+        CaptureService.setPacketQueue(null)
+    }
+
+    /** Replays a pcap on a module thread; the queue fills faster than it drains. */
+    private fun replay(path: String) {
+        val worker = processor ?: return
+        scope.launch(Dispatchers.IO) {
+            val packets = worker.readPcapFile(path)
+            _logs.tryEmit("pcap replay finished: $packets packets from $path")
         }
     }
 }

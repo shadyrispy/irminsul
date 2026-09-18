@@ -35,6 +35,9 @@ struct SnifferState {
     has_items: bool,
     has_avatars: bool,
     has_achievements: bool,
+    /// Guards the completion callback: the three flags above are sticky, so
+    /// without this every packet after completion would re-notify Kotlin.
+    completion_notified: bool,
 }
 
 static GLOBAL_STATE: Mutex<Option<SnifferState>> = Mutex::new(None);
@@ -296,22 +299,53 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
         has_items: false,
         has_avatars: false,
         has_achievements: false,
+        completion_notified: false,
     });
 
     log_to_android("INFO", "Sniffer created successfully");
     0
 }
 
+/// One captured packet's report for the Kotlin side: collection progress plus a
+/// lightweight summary of every command it carried.
+///
+/// The JSON keys produced below are a contract with `StatusDecoder` in the
+/// Kotlin half of this module. `capture/testdata/summary_status.json` is the
+/// single fixture both halves test against, so a rename on either side fails a
+/// test instead of silently reading back as zero.
+struct StatusPayload {
+    packet_id: u64,
+    has_items: bool,
+    has_avatars: bool,
+    has_achievements: bool,
+    artifact_count: usize,
+    weapon_count: usize,
+    material_count: usize,
+    character_count: usize,
+    achievement_count: usize,
+    commands: Vec<serde_json::Value>,
+}
+
+fn status_json(payload: &StatusPayload) -> serde_json::Value {
+    serde_json::json!({
+        "packet_id": payload.packet_id,
+        "has_items": payload.has_items,
+        "has_avatars": payload.has_avatars,
+        "has_achievements": payload.has_achievements,
+        "artifact_count": payload.artifact_count,
+        "weapon_count": payload.weapon_count,
+        "material_count": payload.material_count,
+        "character_count": payload.character_count,
+        "achievement_count": payload.achievement_count,
+        "commands": payload.commands,
+    })
+}
+
 /// Process a raw IP packet from the VPN capture.
 ///
-/// Returns a JSON string with current data status:
-/// ```json
-/// {"has_items":true,"has_avatars":true,"has_achievements":true,
-///  "item_count":3657,"avatar_count":90,"achievement_count":1712,
-///  "artifact_count":1200,"weapon_count":150,"material_count":2307}
-/// ```
-///
-/// When all three data types are collected, also notifies Kotlin via
+/// Returns the packet's status JSON (see [`status_json`]), or null when the
+/// packet carried no game commands. When the three data categories have all
+/// been seen for the first time, also notifies Kotlin once via
 /// `NativeLib.onDataComplete(artifactCount, weaponCount, materialCount,
 ///                            characterCount, achievementCount)`.
 #[unsafe(no_mangle)]
@@ -392,18 +426,17 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
     let character_count = state.player_data.character_count();
     let achievement_count = state.player_data.achievement_count();
 
-    let status_json = serde_json::json!({
-        "packet_id": packet_id,
-        "has_items": state.has_items,
-        "has_avatars": state.has_avatars,
-        "has_achievements": state.has_achievements,
-        "artifact_count": artifact_count,
-        "weapon_count": weapon_count,
-        "material_count": material_count,
-        "character_count": character_count,
-        "achievement_count": achievement_count,
-        "command_count": commands_json.len(),
-        "commands": commands_json,
+    let status_json = status_json(&StatusPayload {
+        packet_id,
+        has_items: state.has_items,
+        has_avatars: state.has_avatars,
+        has_achievements: state.has_achievements,
+        artifact_count,
+        weapon_count,
+        material_count,
+        character_count,
+        achievement_count,
+        commands: commands_json,
     });
 
     let status_str = status_json.to_string();
@@ -413,13 +446,20 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
         commands: cached_commands,
     });
 
-    // Check if all data is collected — notify Kotlin
-    let all_complete = state.has_items && state.has_avatars && state.has_achievements;
+    // Edge-triggered: the three flags are sticky, so without the guard every
+    // later packet would re-notify and the host would re-post the notification.
+    let just_completed = !state.completion_notified
+        && state.has_items
+        && state.has_avatars
+        && state.has_achievements;
+    if just_completed {
+        state.completion_notified = true;
+    }
 
     // Release the lock before calling back into Java
     drop(state_guard);
 
-    if all_complete {
+    if just_completed {
         notify_data_complete(
             &mut env,
             artifact_count,
@@ -607,5 +647,101 @@ fn notify_data_complete(
                 (achievement_count as jint).into(),
             ],
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Payload contract test
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    /// Shared with the Kotlin `StatusDecoderTest`: whoever changes the payload
+    /// must update this one file, and both halves then re-verify against it.
+    const FIXTURE: &str = include_str!("../../../testdata/summary_status.json");
+
+    fn sample_payload() -> StatusPayload {
+        StatusPayload {
+            packet_id: 7,
+            has_items: true,
+            has_avatars: true,
+            has_achievements: false,
+            artifact_count: 1200,
+            weapon_count: 150,
+            material_count: 2307,
+            character_count: 90,
+            achievement_count: 1712,
+            commands: vec![],
+        }
+    }
+
+    fn keys(value: &serde_json::Value) -> Vec<String> {
+        value
+            .as_object()
+            .unwrap_or_else(|| panic!("expected a JSON object, got {value}"))
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn sorted(mut values: Vec<String>) -> Vec<String> {
+        values.sort();
+        values
+    }
+
+    #[test]
+    fn status_json_emits_exactly_the_fixture_keys() {
+        let fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture parses");
+        let produced = status_json(&sample_payload());
+        assert_eq!(
+            sorted(keys(&produced)),
+            sorted(keys(&fixture)),
+            "top-level payload keys drifted from capture/testdata/summary_status.json"
+        );
+    }
+
+    #[test]
+    fn command_summary_has_the_fixture_command_keys() {
+        let fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture parses");
+        // An unresolvable command id takes the producer's early-return path, so
+        // its key set is the stable base the decoder relies on.
+        let command = GameCommand {
+            command_id: 0,
+            header_len: 10,
+            data_len: 0,
+            ext_header: vec![],
+            proto_data: vec![],
+            direction: PacketDirection::Received,
+        };
+        assert_eq!(
+            sorted(keys(&command.summary_json())),
+            sorted(keys(&fixture["commands"][0])),
+            "command summary keys drifted from the fixture"
+        );
+    }
+
+    #[test]
+    fn fixture_values_have_the_types_the_decoder_reads() {
+        let fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture parses");
+        assert!(fixture["packet_id"].is_number());
+        for flag in ["has_items", "has_avatars", "has_achievements"] {
+            assert!(fixture[flag].is_boolean(), "{flag} must be a bool");
+        }
+        for count in [
+            "artifact_count",
+            "weapon_count",
+            "material_count",
+            "character_count",
+            "achievement_count",
+        ] {
+            assert!(fixture[count].is_number(), "{count} must be a number");
+        }
+        let command = &fixture["commands"][0];
+        assert!(command["cmd_id"].is_number());
+        assert!(command["size"].is_number());
+        assert!(command["brief_keys"].is_array());
+        assert_eq!(command["direction"], "received");
     }
 }

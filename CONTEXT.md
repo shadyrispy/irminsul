@@ -28,10 +28,11 @@ count. Produced by the module, published to the host through `DataStatusSink`.
 
 ## Completion
 
-The moment a session has all four data categories. Emitted once as
-`Completion` (with counts) and, unless the host's `Config` opts out, posted as
-the heads-up notification. Distinct from `DataStatus`: completion is an event,
-progress is state.
+The moment a session has all four data categories. Emitted exactly once per
+session as `Completion` (with counts) — the native side edge-triggers it,
+because the three "have we seen this" flags are sticky — and, unless the host's
+`Config` opts out, posted as the heads-up notification. Distinct from
+`DataStatus`: completion is an event, progress is state.
 
 ## Permission snapshot
 
@@ -39,10 +40,25 @@ progress is state.
 module, including ROM-specific guidance. A host asks what is missing and calls
 `openFixSettings(kind)`; it never assembles settings intents itself.
 
+## Capture source
+
+Where a session's packets come from: `CaptureSource.Vpn` (live, until `stop`)
+or `CaptureSource.File` (a recorded pcap, replayed on a module thread). One
+pipeline and one `DataStatusSink` behind both, so a host renders either without
+a special case.
+
 ## Seam
 
 The capture module's interface is `com.esc.irminsul.capture` — the facade
 `IrminsulCapture` plus `DataStatus`, `DataStatusSink`, `PacketRecord`,
-`PacketLog`, `PermissionSnapshot`, `Completion`, `PermissionKind`, `InitResult`.
-Everything else lives in `com.esc.irminsul.capture.internal` and is `internal`;
-see `docs/adr/0001`.
+`CaptureSource`, `CaptureResult`/`CaptureError`, `PermissionSnapshot`,
+`PermissionKind`, `Completion`. Everything else lives in
+`com.esc.irminsul.capture.internal` and is `internal`; see `docs/adr/0001`.
+
+## Native contracts
+
+Two things are name-level agreements between the Kotlin and native halves, each
+with a build-time gate: the JNI symbol names (`verifyNativeSymbols`) and the
+keys of the per-packet status JSON
+(`capture/testdata/summary_status.json`, asserted by both `contract_tests` in
+`irminsul-jni` and `StatusDecoderTest`). See `docs/adr/0002`.

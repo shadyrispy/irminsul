@@ -1,9 +1,11 @@
 package com.esc.irminsul
 
+import com.esc.irminsul.capture.CaptureError
+import com.esc.irminsul.capture.CaptureResult
+import com.esc.irminsul.capture.CaptureSource
 import com.esc.irminsul.capture.Completion
-import com.esc.irminsul.capture.InitResult
 import com.esc.irminsul.capture.IrminsulCapture
-import com.esc.irminsul.capture.PacketLog
+import com.esc.irminsul.capture.PacketRecord
 import com.esc.irminsul.capture.PermissionKind
 import com.esc.irminsul.capture.PermissionSnapshot
 import com.esc.irminsul.capture.R as CaptureR
@@ -94,7 +96,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private val dataStore: DataStore = DataStore()
     private val localStorage: LocalStorage = LocalStorage(context)
-    val packetLog: PacketLog = IrminsulCapture.packets
+    val packets: StateFlow<List<PacketRecord>> = IrminsulCapture.packets
 
     private var isAutoStopping = false
 
@@ -112,13 +114,9 @@ class MainViewModel(private val context: Context) : ViewModel() {
         onDataUpdated(items, characters, achievements)
     }
 
-    private fun initProcessing() {
+    private fun startCaptureFrom(source: CaptureSource) {
         dataStore.clear()
-        IrminsulCapture.startPipeline(dataStore, captureConfig())
-    }
-
-    private fun stopProcessing() {
-        IrminsulCapture.stopPipeline()
+        IrminsulCapture.start(context, source, dataStore, captureConfig())
     }
 
     init {
@@ -137,12 +135,14 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
 
         when (val native = IrminsulCapture.initNative(context)) {
-            InitResult.Ready -> addLog("Irminsul native library initialized successfully")
-            InitResult.NotInstalled -> {
-                addLog("Warning: Native library not available. Packet parsing disabled.")
-                addLog("To enable parsing, compile the Rust library.")
+            is CaptureResult.Ok -> addLog("Irminsul native library initialized successfully")
+            is CaptureResult.Err -> when (native.error) {
+                CaptureError.NativeUnavailable -> {
+                    addLog("Warning: Native library not available. Packet parsing disabled.")
+                    addLog("To enable parsing, compile the Rust library.")
+                }
+                else -> addLog("Failed to initialize native library: ${native.error}")
             }
-            is InitResult.Failed -> addLog("Failed to initialize native library: ${native.code}")
         }
 
         viewModelScope.launch {
@@ -153,7 +153,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
                 )
 
                 if (!isCapturing) {
-                    stopProcessing()
+                    IrminsulCapture.stop(context)
                 }
             }
         }
@@ -219,10 +219,15 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
-    fun openBatteryOptimizationSettings() {
-        if (!IrminsulCapture.openFixSettings(context, PermissionKind.BatteryOptimization)) {
+    /** Opens the settings page for [kind], toasting when this device has none. */
+    private fun openFix(kind: PermissionKind) {
+        if (IrminsulCapture.openFixSettings(context, kind) is CaptureResult.Err) {
             showToast(context.getString(R.string.toast_cannot_open_settings))
         }
+    }
+
+    fun openBatteryOptimizationSettings() {
+        openFix(PermissionKind.BatteryOptimization)
     }
 
     fun requestNotificationPermission(launcher: androidx.activity.result.ActivityResultLauncher<String>) {
@@ -247,21 +252,15 @@ class MainViewModel(private val context: Context) : ViewModel() {
         } else {
             PermissionKind.Notifications
         }
-        if (!IrminsulCapture.openFixSettings(context, kind)) {
-            showToast(context.getString(R.string.toast_cannot_open_settings))
-        }
+        openFix(kind)
     }
 
     fun openChannelSettings() {
-        if (!IrminsulCapture.openFixSettings(context, PermissionKind.HeadsUp)) {
-            showToast(context.getString(R.string.toast_cannot_open_settings))
-        }
+        openFix(PermissionKind.HeadsUp)
     }
 
     fun openAutoStartSettings() {
-        if (!IrminsulCapture.openFixSettings(context, PermissionKind.AutoStart)) {
-            showToast(context.getString(R.string.toast_cannot_open_settings))
-        }
+        openFix(PermissionKind.AutoStart)
     }
 
     fun testHeadsUpNotification() {
@@ -277,10 +276,17 @@ class MainViewModel(private val context: Context) : ViewModel() {
         dataStore.clear()
         logList.clear()
         _uiState.value = UiState()
+        // The sniffer holds the only copy of the decoded state, so a reset is
+        // native-side; the pipeline and any live capture stay attached.
         IrminsulCapture.resetNative()
-        initProcessing()
+        IrminsulCapture.clearPackets()
         showToast(context.getString(R.string.data_reset))
         addLog("Data reset!")
+    }
+
+    /** Drops the decoded-command list without touching collected player data. */
+    fun clearPackets() {
+        IrminsulCapture.clearPackets()
     }
 
     private fun showToast(message: String) {
@@ -317,8 +323,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     fun startVpnCapture() {
         Log.d(TAG, "Starting VPN capture")
         isAutoStopping = false
-        stopProcessing()
-        IrminsulCapture.start(context, dataStore, captureConfig())
+        startCaptureFrom(CaptureSource.Vpn)
 
         _uiState.value = _uiState.value.copy(isCapturing = true, isPendingStateChange = false, showLaunchGameDialog = true)
         addLog("VPN capture started")
@@ -392,26 +397,9 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
-    fun processPcapFileByPath(filePath: String) {
-        try {
-            addLog("Processing PCAP file: $filePath...")
-            initProcessing()
-
-            if (File(filePath).exists()) {
-                IrminsulCapture.importPcap(filePath)
-            } else {
-                addLog("Error: File not found: $filePath")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error processing PCAP file", e)
-            addLog("Error: ${e.message}")
-        }
-    }
-
     private fun processPcapFile(uri: Uri) {
         try {
             addLog("Processing PCAP file...")
-            initProcessing()
 
             var filePath: String? = uri.path
             if (filePath == null || !File(filePath).exists()) {
@@ -431,7 +419,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
             }
 
             if (filePath != null) {
-                IrminsulCapture.importPcap(filePath)
+                startCaptureFrom(CaptureSource.File(filePath))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error processing PCAP file", e)
@@ -756,7 +744,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        stopProcessing()
+        IrminsulCapture.stop(context)
         IrminsulCapture.close()
     }
 }

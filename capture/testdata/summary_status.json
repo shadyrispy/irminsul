@@ -1,0 +1,41 @@
+{
+  "packet_id": 7,
+  "has_items": true,
+  "has_avatars": true,
+  "has_achievements": false,
+  "artifact_count": 1200,
+  "weapon_count": 150,
+  "material_count": 2307,
+  "character_count": 90,
+  "achievement_count": 1712,
+  "commands": [
+    {
+      "cmd_id": 0,
+      "name": "unknown",
+      "direction": "received",
+      "header_len": 10,
+      "size": 0,
+      "field_count": null,
+      "brief_keys": []
+    },
+    {
+      "cmd_id": 26915,
+      "name": "GadgetInteractReq",
+      "direction": "sent",
+      "header_len": 10,
+      "size": 12,
+      "field_count": 3,
+      "brief_keys": ["gadget", "ctx"]
+    },
+    {
+      "cmd_id": 6529,
+      "name": "GetScenePointRsp",
+      "direction": "received",
+      "header_len": 10,
+      "size": 2242,
+      "field_count": null,
+      "brief_keys": [],
+      "parse_error": true
+    }
+  ]
+}

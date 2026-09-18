@@ -26,74 +26,25 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/**
+ * Whether a capture session is live. Written only by [CaptureService] (and by
+ * the facade's [com.esc.irminsul.capture.IrminsulCapture.abortStart] when a
+ * start never got consent); collected through the facade's `isCapturing`.
+ *
+ * Collection progress deliberately does not live here: that state arrives on
+ * every [com.esc.irminsul.capture.DataStatus] publish, so mirroring it would
+ * give the module a second, unsynchronised source of truth.
+ */
 internal object CaptureStatus {
     private const val TAG = "CaptureStatus"
 
     private val _isCapturing = MutableStateFlow(false)
     val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
 
-    private val _itemsLoaded = MutableStateFlow(false)
-    val itemsLoaded: StateFlow<Boolean> = _itemsLoaded.asStateFlow()
-
-    private val _charactersLoaded = MutableStateFlow(false)
-    val charactersLoaded: StateFlow<Boolean> = _charactersLoaded.asStateFlow()
-
-    private val _weaponsLoaded = MutableStateFlow(false)
-    val weaponsLoaded: StateFlow<Boolean> = _weaponsLoaded.asStateFlow()
-
-    private val _achievementsLoaded = MutableStateFlow(false)
-    val achievementsLoaded: StateFlow<Boolean> = _achievementsLoaded.asStateFlow()
-
-    private val _artifactsCount = MutableStateFlow(0)
-    val artifactsCount: StateFlow<Int> = _artifactsCount.asStateFlow()
-
-    private val _charactersCount = MutableStateFlow(0)
-    val charactersCount: StateFlow<Int> = _charactersCount.asStateFlow()
-
-    private val _weaponsCount = MutableStateFlow(0)
-    val weaponsCount: StateFlow<Int> = _weaponsCount.asStateFlow()
-
-    private val _achievementsCount = MutableStateFlow(0)
-    val achievementsCount: StateFlow<Int> = _achievementsCount.asStateFlow()
-
-    fun updateCapturingStatus(running: Boolean) {
+    fun setCapturing(running: Boolean) {
         _isCapturing.value = running
         Log.d(TAG, "Capture status updated: $running")
     }
-
-    fun updateParsingProgress(
-        itemsLoaded: Boolean,
-        charactersLoaded: Boolean,
-        weaponsLoaded: Boolean,
-        achievementsLoaded: Boolean,
-        artifactsCount: Int,
-        charactersCount: Int,
-        weaponsCount: Int,
-        achievementsCount: Int
-    ) {
-        _itemsLoaded.value = itemsLoaded
-        _charactersLoaded.value = charactersLoaded
-        _weaponsLoaded.value = weaponsLoaded
-        _achievementsLoaded.value = achievementsLoaded
-        _artifactsCount.value = artifactsCount
-        _charactersCount.value = charactersCount
-        _weaponsCount.value = weaponsCount
-        _achievementsCount.value = achievementsCount
-    }
-
-    fun resetParsingProgress() {
-        _itemsLoaded.value = false
-        _charactersLoaded.value = false
-        _weaponsLoaded.value = false
-        _achievementsLoaded.value = false
-        _artifactsCount.value = 0
-        _charactersCount.value = 0
-        _weaponsCount.value = 0
-        _achievementsCount.value = 0
-    }
-
-    val allDataLoaded: Boolean
-        get() = _itemsLoaded.value && _charactersLoaded.value && _weaponsLoaded.value && _achievementsLoaded.value
 }
 
 /**
@@ -142,10 +93,6 @@ class CaptureService : VpnService() {
         )
 
         private val FALLBACK_DNS_LIST = listOf("223.5.5.5", "119.29.29.29", "114.114.114.114")
-
-        @Volatile
-        private var _isRunning = false
-        val isRunning: Boolean get() = _isRunning
 
         @Volatile
         private var _packetQueue: LinkedBlockingQueue<RawPacket>? = null
@@ -268,7 +215,7 @@ class CaptureService : VpnService() {
     }
 
     private fun startCapture() {
-        if (_isRunning) {
+        if (CaptureStatus.isCapturing.value) {
             Log.w(TAG, "Capture already running")
             return
         }
@@ -333,8 +280,7 @@ class CaptureService : VpnService() {
             return
         }
 
-        _isRunning = true
-        CaptureStatus.updateCapturingStatus(true)
+        CaptureStatus.setCapturing(true)
         Log.d(TAG, "VPN interface established, starting capture")
 
         val tunfd = vpnInterface!!.fd
@@ -348,10 +294,10 @@ class CaptureService : VpnService() {
     }
 
     fun stopCapture() {
-        if (!_isRunning) return
+        if (!CaptureStatus.isCapturing.value) return
 
         Log.d(TAG, "Stopping capture")
-        _isRunning = false
+        CaptureStatus.setCapturing(false)
 
         try {
             nativeStopCapture()
@@ -373,7 +319,6 @@ class CaptureService : VpnService() {
             vpnInterface = null
 
             setPacketQueue(null)
-            CaptureStatus.updateCapturingStatus(false)
             mainHandler.post {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -518,7 +463,7 @@ class CaptureService : VpnService() {
     }
 
     private fun updateNotification() {
-        if (!_isRunning) return
+        if (!CaptureStatus.isCapturing.value) return
         val notification = buildNotification(bytesSent, bytesReceived, numConnections)
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, notification)

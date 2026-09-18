@@ -1,5 +1,6 @@
 package com.esc.irminsul.ui
 
+import com.esc.irminsul.capture.CaptureResult
 import com.esc.irminsul.capture.IrminsulCapture
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -55,7 +56,7 @@ fun PacketDetailScreen(
     onBack: () -> Unit
 ) {
     val record = remember(packetId, commandIndex) {
-        viewModel.packetLog.records.value.firstOrNull {
+        viewModel.packets.value.firstOrNull {
             it.packetId == packetId && it.commandIndex == commandIndex
         }
     }
@@ -64,10 +65,11 @@ fun PacketDetailScreen(
     var unavailable by remember { mutableStateOf(false) }
 
     LaunchedEffect(packetId, commandIndex) {
-        val json = withContext(Dispatchers.IO) { IrminsulCapture.commandBody(packetId, commandIndex) }
-        if (json == null) {
+        val body = withContext(Dispatchers.IO) { IrminsulCapture.commandBody(packetId, commandIndex) }
+        if (body is CaptureResult.Err) {
             unavailable = true
         } else {
+            val json = (body as CaptureResult.Ok).value
             rawJson = json
             rootNode = withContext(Dispatchers.Default) {
                 buildProtoTree("root", JSONObject(json))

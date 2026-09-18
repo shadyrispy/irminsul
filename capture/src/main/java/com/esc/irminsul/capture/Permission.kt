@@ -53,13 +53,3 @@ data class Completion(
     val achievementsCount: Int,
     val materialsCount: Int
 )
-
-/** Outcome of loading the native library and creating the sniffer. */
-sealed interface InitResult {
-    data object Ready : InitResult
-    /** The `.so` is not installed for this ABI. */
-    data object NotInstalled : InitResult
-
-    /** Loaded, but the sniffer could not be created; `code` is the native status. */
-    data class Failed(val code: Int) : InitResult
-}

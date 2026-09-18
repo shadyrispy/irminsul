@@ -1,22 +1,23 @@
 package com.esc.irminsul.capture.internal
+
 import android.util.Log
-import com.esc.irminsul.capture.DataStatus
 import com.esc.irminsul.capture.DataStatusSink
-import com.esc.irminsul.capture.PacketLog
-import com.esc.irminsul.capture.PacketRecord
 
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.BlockingQueue
-import org.json.JSONObject
 
 /** A raw L7 packet with the wall-clock time it was seen (live) or captured (pcap). */
 internal class RawPacket(val data: ByteArray, val timestampMillis: Long)
 
+/**
+ * Consumes the packet queue on its own thread: hands each packet to the native
+ * decoder and publishes what comes back. Owns no state a host can write.
+ */
 internal class PacketProcessor(
     private val dataStore: DataStatusSink,
-    private val packetLog: PacketLog,
+    private val packetLog: PacketRingBuffer,
     private val packetQueue: BlockingQueue<RawPacket>,
     private val onDataUpdate: (items: Boolean, characters: Boolean, achievements: Boolean) -> Unit
 ) : Thread() {
@@ -29,19 +30,6 @@ internal class PacketProcessor(
         private const val PCAP_MAGIC_LITTLE_ENDIAN = 0xA1B2C3D4.toInt()
         private const val PCAP_MAGIC_NSEC_LITTLE_ENDIAN = 0xA1B23C4D.toInt()
         private const val PCAP_MAGIC_NSEC_BIG_ENDIAN = 0x4D3CB2A1.toInt()
-        private val PCAP_HDR_START_BYTES = ByteBuffer.wrap(hexToBytes("d4c3b2a1020004000000000000000000"))
-
-        private fun hexToBytes(s: String): ByteArray {
-            val len = s.length
-            val data = ByteArray(len / 2)
-            var i = 0
-            while (i < len) {
-                data[i / 2] = ((Character.digit(s[i], 16) shl 4)
-                        + Character.digit(s[i + 1], 16)).toByte()
-                i += 2
-            }
-            return data
-        }
     }
 
     @Volatile
@@ -67,76 +55,17 @@ internal class PacketProcessor(
 
     private fun processPacket(packet: RawPacket) {
         try {
-            val statusJson = NativeLib.processPacket(packet.data)
-            if (statusJson != null) {
-                parseStatusJson(statusJson, packet.timestampMillis)
+            val statusJson = NativeLib.processPacket(packet.data) ?: return
+            val update = StatusDecoder.decode(statusJson, packet.timestampMillis) ?: return
+            packetLog.appendAll(update.records)
+            dataStore.publish(update.status)
+            with(update.status) {
+                if (itemsLoaded || charactersLoaded || achievementsLoaded) {
+                    onDataUpdate(itemsLoaded, charactersLoaded, achievementsLoaded)
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error processing packet", e)
-        }
-    }
-
-    private fun parseStatusJson(json: String, timestampMillis: Long) {
-        try {
-            val obj = JSONObject(json)
-            val hasItems = obj.optBoolean("has_items", false)
-            val hasAvatars = obj.optBoolean("has_avatars", false)
-            val hasAchievements = obj.optBoolean("has_achievements", false)
-            val artifactCount = obj.optInt("artifact_count", 0)
-            val weaponCount = obj.optInt("weapon_count", 0)
-            val materialCount = obj.optInt("material_count", 0)
-            val characterCount = obj.optInt("character_count", 0)
-            val achievementCount = obj.optInt("achievement_count", 0)
-
-            val packetId = obj.optLong("packet_id", -1L)
-            obj.optJSONArray("commands")?.let { commands ->
-                val batch = ArrayList<PacketRecord>(commands.length())
-                for (i in 0 until commands.length()) {
-                    val cmd = commands.optJSONObject(i) ?: continue
-                    val fieldCount = if (cmd.isNull("field_count")) null else cmd.optInt("field_count")
-                    val briefKeys = buildList {
-                        cmd.optJSONArray("brief_keys")?.let { keys ->
-                            for (j in 0 until keys.length()) add(keys.optString(j))
-                        }
-                    }
-                    batch.add(
-                        PacketRecord(
-                            packetId = packetId,
-                            commandIndex = i,
-                            cmdId = cmd.optInt("cmd_id", 0),
-                            name = cmd.optString("name", "unknown"),
-                            isSent = cmd.optString("direction", "") == "sent",
-                            sizeBytes = cmd.optInt("size", 0),
-                            fieldCount = fieldCount,
-                            briefKeys = briefKeys,
-                            parseError = cmd.optBoolean("parse_error", false),
-                            timestampMillis = timestampMillis
-                        )
-                    )
-                }
-                packetLog.appendAll(batch)
-            }
-
-            dataStore.publish(
-                DataStatus(
-                    itemsLoaded = hasItems,
-                    charactersLoaded = hasAvatars,
-                    // Weapon data arrives in the same store notify as items.
-                    weaponsLoaded = hasItems,
-                    achievementsLoaded = hasAchievements,
-                    artifactsCount = artifactCount,
-                    weaponsCount = weaponCount,
-                    materialsCount = materialCount,
-                    charactersCount = characterCount,
-                    achievementsCount = achievementCount
-                )
-            )
-
-            if (hasItems || hasAvatars || hasAchievements) {
-                onDataUpdate(hasItems, hasAvatars, hasAchievements)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error parsing status JSON", e)
         }
     }
 
@@ -152,12 +81,19 @@ internal class PacketProcessor(
 
     // --- PCAP file reading ---
 
-    fun readPcapFile(pcapPath: String) {
+    /**
+     * Feeds a saved pcap into the queue, blocking while the queue is full so a
+     * complete import never drops packets. Call off the main thread.
+     *
+     * @return how many packets were handed to the decoder.
+     */
+    fun readPcapFile(pcapPath: String): Int {
+        var fed = 0
         try {
             FileInputStream(pcapPath).use { inputStream ->
                 val header = ByteArray(PCAP_HDR_SIZE)
                 val read = inputStream.read(header)
-                if (read != PCAP_HDR_SIZE) return
+                if (read != PCAP_HDR_SIZE) return 0
 
                 val hdrBuf = ByteBuffer.wrap(header)
                 val magic = hdrBuf.int
@@ -201,10 +137,12 @@ internal class PacketProcessor(
                     // Block until space is available instead of silently dropping
                     // packets, so a complete PCAP import never loses data.
                     packetQueue.put(RawPacket(packetData, packetTimestamp))
+                    fed++
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error reading PCAP file", e)
         }
+        return fed
     }
 }

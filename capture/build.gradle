@@ -54,6 +54,11 @@ android {
                 srcDirs 'src/main/jniLibs'
             }
         }
+        test {
+            // The native payload contract lives in one file that both the Rust
+            // contract tests and StatusDecoderTest read.
+            resources.srcDirs += 'testdata'
+        }
     }
 
     // Rust decrypt/parse stack (libirminsul.so) built from this module's rust/.
@@ -163,6 +168,29 @@ tasks.matching { it.name == 'assembleDebug' }.configureEach {
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+    testImplementation 'junit:junit:4.13.2'
+    // Real org.json for JVM unit tests; the android.jar stubs throw "not mocked".
+    testImplementation 'org.json:json:20240303'
+}
+
+// The other half of the payload contract: the native producer must keep
+// emitting the keys capture/testdata/summary_status.json declares. Runs with
+// `./gradlew :capture:check`, next to the Kotlin decoder test.
+tasks.register('verifyNativePayloadContract', Exec) {
+    group = 'verification'
+    description = 'Runs the Rust contract tests that pin the JNI payload keys.'
+    workingDir "${projectDir}/rust/irminsul-jni"
+    def cargoDir = "${System.getenv('HOME')}/.cargo/bin"
+    def basePath = System.getenv('PATH') ?: ''
+    environment 'PATH', basePath.contains(cargoDir) ? basePath : "${basePath}:${cargoDir}"
+    def homeCargo = "${cargoDir}/cargo"
+    commandLine file(homeCargo).exists() ? homeCargo : 'cargo', 'test', '--offline', 'contract_tests'
+    inputs.dir "${projectDir}/rust/irminsul-jni/src"
+    inputs.dir "${projectDir}/testdata"
+}
+
+tasks.matching { it.name == 'check' }.configureEach {
+    dependsOn 'verifyNativePayloadContract'
 }
 
 // Publish as `com.esc.irminsul:capture:<version>`; `./gradlew :capture:publishToMavenLocal`
@@ -175,7 +203,7 @@ afterEvaluate {
                 from components.release
                 groupId = 'com.esc.irminsul'
                 artifactId = 'capture'
-                version = '1.2.0'
+                version = '1.3.0'
                 pom {
                     name = 'Irminsul Capture'
                     description = 'Genshin packet capture, decryption and protobuf ' +

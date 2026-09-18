@@ -53,7 +53,7 @@ fun PacketListScreen(
     viewModel: MainViewModel,
     onOpenDetail: (packetId: Long, commandIndex: Int) -> Unit
 ) {
-    val records by viewModel.packetLog.records.collectAsState()
+    val records by viewModel.packets.collectAsState()
     var query by remember { mutableStateOf("") }
 
     val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
@@ -90,7 +90,7 @@ fun PacketListScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.weight(1f))
-            IconButton(onClick = { viewModel.packetLog.clear() }) {
+            IconButton(onClick = { viewModel.clearPackets() }) {
                 Icon(
                     imageVector = Icons.Filled.Delete,
                     contentDescription = stringResource(R.string.packet_clear),

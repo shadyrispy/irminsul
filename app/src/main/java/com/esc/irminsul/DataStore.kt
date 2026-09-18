@@ -1,5 +1,6 @@
 package com.esc.irminsul
 
+import com.esc.irminsul.capture.CaptureResult
 import com.esc.irminsul.capture.IrminsulCapture
 import com.esc.irminsul.capture.DataStatusSink
 import com.esc.irminsul.capture.DataStatus
@@ -58,15 +59,19 @@ class DataStore : DataStatusSink {
 
     fun exportGood(settings: ExportSettings = ExportSettings()): Pair<String, ExportStats> {
         val settingsJson = settingsToJson(settings)
-        val json = IrminsulCapture.exportGood(settingsJson)
-            ?: throw RuntimeException("Failed to export GOOD format from native library")
+        val json = when (val result = IrminsulCapture.exportGood(settingsJson)) {
+            is CaptureResult.Ok -> result.value
+            is CaptureResult.Err -> throw RuntimeException("GOOD export failed: ${result.error}")
+        }
         val stats = parseExportStats(json, settings)
         return Pair(json, stats)
     }
 
     fun exportAchievements(formatCode: Int): String {
-        return IrminsulCapture.exportAchievements(formatCode)
-            ?: throw RuntimeException("Failed to export achievements from native library")
+        return when (val result = IrminsulCapture.exportAchievements(formatCode)) {
+            is CaptureResult.Ok -> result.value
+            is CaptureResult.Err -> throw RuntimeException("Achievement export failed: ${result.error}")
+        }
     }
 
     private fun settingsToJson(settings: ExportSettings): String {
