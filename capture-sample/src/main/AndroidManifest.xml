@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- VPN permission, foreground-service permissions and the capture service
+         itself all arrive from the capture AAR via manifest merging. -->
+    <application android:label="Irminsul Sample" android:allowBackup="false">
+        <activity
+            android:name=".SampleActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

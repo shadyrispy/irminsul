@@ -1,6 +1,7 @@
 plugins {
     id 'com.android.library'
     id 'org.jetbrains.kotlin.android'
+    id 'maven-publish'
 }
 
 android {
@@ -101,4 +102,25 @@ android {
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+}
+
+// Publish as `com.esc.irminsul:capture:<version>`; `./gradlew :capture:publishToMavenLocal`
+// (or :capture:publishReleasePublicationTo<repo>) produces an AAR that already
+// carries both native libraries, the VPN service and the permissions.
+afterEvaluate {
+    publishing {
+        publications {
+            release(MavenPublication) {
+                from components.release
+                groupId = 'com.esc.irminsul'
+                artifactId = 'capture'
+                version = '1.1.0'
+                pom {
+                    name = 'Irminsul Capture'
+                    description = 'Genshin packet capture, decryption and protobuf ' +
+                            'command decoding as an embeddable Android library.'
+                }
+            }
+        }
+    }
 }

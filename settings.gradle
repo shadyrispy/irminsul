@@ -12,6 +12,9 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        // Lets :capture-sample consume the locally published :capture AAR
+        // (./gradlew :capture:publishToMavenLocal) instead of the project.
+        mavenLocal()
         maven { url 'https://maven.aliyun.com/repository/google' }
         maven { url 'https://maven.aliyun.com/repository/central' }
         google()
@@ -22,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "IrminsulAndroid"
 include ':app'
 include ':capture'
+include ':capture-sample'
