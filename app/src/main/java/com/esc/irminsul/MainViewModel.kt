@@ -1,5 +1,6 @@
 package com.esc.irminsul
 
+import com.esc.irminsul.capture.IrminsulCapture
 import com.esc.irminsul.capture.R as CaptureR
 import android.app.Activity
 import android.app.NotificationChannel
@@ -87,9 +88,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private val dataStore: DataStore = DataStore()
     private val localStorage: LocalStorage = LocalStorage(context)
-    val packetLog: PacketLog = PacketLog()
-    private var packetQueue: LinkedBlockingQueue<RawPacket>? = null
-    private var packetProcessor: PacketProcessor? = null
+    val packetLog: PacketLog = IrminsulCapture.packets
 
     private var isAutoStopping = false
 
@@ -101,29 +100,19 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private var logList = mutableListOf<String>()
 
+    private fun captureConfig() = IrminsulCapture.Config(
+        queueCapacity = QUEUE_CAPACITY
+    ) { items, characters, achievements ->
+        onDataUpdated(items, characters, achievements)
+    }
+
     private fun initProcessing() {
         dataStore.clear()
-        packetLog.clear()
-        packetQueue = LinkedBlockingQueue(QUEUE_CAPACITY)
-        packetProcessor = PacketProcessor(
-            dataStore,
-            packetLog,
-            packetQueue!!
-        ) { items, characters, achievements ->
-            onDataUpdated(items, characters, achievements)
-        }
-        packetProcessor!!.start()
+        IrminsulCapture.startPipeline(dataStore, captureConfig())
     }
 
     private fun stopProcessing() {
-        packetProcessor?.stopProcessor()
-        packetProcessor = null
-        packetQueue = null
-    }
-
-    private fun startProcessing() {
-        stopProcessing()
-        initProcessing()
+        IrminsulCapture.stopPipeline()
     }
 
     init {
@@ -146,18 +135,15 @@ class MainViewModel(private val context: Context) : ViewModel() {
             }
         })
 
-        NativeLib.initLogging()
+        val nativeResult = IrminsulCapture.initNative()
 
-        if (NativeLib.isAvailable()) {
-            val result = NativeLib.createSniffer()
-            if (result == 0) {
-                addLog("Irminsul native library initialized successfully")
-            } else {
-                addLog("Failed to initialize native library: $result")
-            }
-        } else {
+        if (!NativeLib.isAvailable()) {
             addLog("Warning: Native library not available. Packet parsing disabled.")
             addLog("To enable parsing, compile the Rust library.")
+        } else if (nativeResult == 0) {
+            addLog("Irminsul native library initialized successfully")
+        } else {
+            addLog("Failed to initialize native library: $nativeResult")
         }
 
         viewModelScope.launch {
@@ -393,8 +379,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
         dataStore.clear()
         logList.clear()
         _uiState.value = UiState()
-        NativeLib.destroySniffer()
-        NativeLib.createSniffer()
+        IrminsulCapture.resetNative()
         initProcessing()
         showToast(context.getString(R.string.data_reset))
         addLog("Data reset!")
@@ -434,18 +419,10 @@ class MainViewModel(private val context: Context) : ViewModel() {
     fun startVpnCapture() {
         Log.d(TAG, "Starting VPN capture")
         isAutoStopping = false
-        CaptureStatus.resetParsingProgress()
         stopProcessing()
-        initProcessing()
-
-        CaptureService.setPacketQueue(packetQueue)
-
-        val intent = Intent(context, CaptureService::class.java)
-        intent.action = CaptureService.ACTION_START
-        ContextCompat.startForegroundService(context, intent)
+        IrminsulCapture.start(context, dataStore, captureConfig())
 
         _uiState.value = _uiState.value.copy(isCapturing = true, isPendingStateChange = false, showLaunchGameDialog = true)
-        CaptureStatus.updateCapturingStatus(true)
         addLog("VPN capture started")
     }
 
@@ -456,10 +433,6 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private fun stopVpnCapture(autoStop: Boolean = false) {
         Log.d(TAG, "Stopping VPN capture (autoStop=$autoStop)")
-        val intent = Intent(context, CaptureService::class.java)
-        intent.action = CaptureService.ACTION_STOP
-        context.startService(intent)
-
         if (autoStop) {
             val status = dataStore.dataStatus.value
             CaptureService.showCompletionNotification(
@@ -471,9 +444,8 @@ class MainViewModel(private val context: Context) : ViewModel() {
             )
         }
 
-        stopProcessing()
+        IrminsulCapture.stop(context)
         _uiState.value = _uiState.value.copy(isCapturing = false, isPendingStateChange = false, showLaunchGameDialog = false)
-        CaptureStatus.updateCapturingStatus(false)
         addLog("VPN capture stopped")
     }
 
@@ -534,11 +506,10 @@ class MainViewModel(private val context: Context) : ViewModel() {
     fun processPcapFileByPath(filePath: String) {
         try {
             addLog("Processing PCAP file: $filePath...")
-            stopProcessing()
             initProcessing()
 
             if (File(filePath).exists()) {
-                packetProcessor?.readPcapFile(filePath)
+                IrminsulCapture.importPcap(filePath)
             } else {
                 addLog("Error: File not found: $filePath")
             }
@@ -551,7 +522,6 @@ class MainViewModel(private val context: Context) : ViewModel() {
     private fun processPcapFile(uri: Uri) {
         try {
             addLog("Processing PCAP file...")
-            stopProcessing()
             initProcessing()
 
             var filePath: String? = uri.path
@@ -572,7 +542,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
             }
 
             if (filePath != null) {
-                packetProcessor?.readPcapFile(filePath)
+                IrminsulCapture.importPcap(filePath)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error processing PCAP file", e)

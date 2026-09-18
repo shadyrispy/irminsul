@@ -113,15 +113,19 @@ class PacketProcessor(
                 packetLog.appendAll(batch)
             }
 
-            dataStore.updateStatus(
-                itemsLoaded = hasItems,
-                charactersLoaded = hasAvatars,
-                achievementsLoaded = hasAchievements,
-                artifactsCount = artifactCount,
-                weaponsCount = weaponCount,
-                materialsCount = materialCount,
-                charactersCount = characterCount,
-                achievementsCount = achievementCount
+            dataStore.publish(
+                DataStatus(
+                    itemsLoaded = hasItems,
+                    charactersLoaded = hasAvatars,
+                    // Weapon data arrives in the same store notify as items.
+                    weaponsLoaded = hasItems,
+                    achievementsLoaded = hasAchievements,
+                    artifactsCount = artifactCount,
+                    weaponsCount = weaponCount,
+                    materialsCount = materialCount,
+                    charactersCount = characterCount,
+                    achievementsCount = achievementCount
+                )
             )
 
             if (hasItems || hasAvatars || hasAchievements) {

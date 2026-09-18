@@ -6,18 +6,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 
-data class DataStatus(
-    val itemsLoaded: Boolean = false,
-    val charactersLoaded: Boolean = false,
-    val weaponsLoaded: Boolean = false,
-    val achievementsLoaded: Boolean = false,
-    val artifactsCount: Int = 0,
-    val charactersCount: Int = 0,
-    val materialsCount: Int = 0,
-    val weaponsCount: Int = 0,
-    val achievementsCount: Int = 0
-)
-
 data class ExportStats(
     val charactersCount: Int,
     val artifactsCount: Int,
@@ -53,30 +41,11 @@ class DataStore : DataStatusSink {
     private val _dataStatus = MutableStateFlow(DataStatus())
     val dataStatus: StateFlow<DataStatus> = _dataStatus.asStateFlow()
 
-    override fun updateStatus(
-        itemsLoaded: Boolean,
-        charactersLoaded: Boolean,
-        achievementsLoaded: Boolean,
-        artifactsCount: Int,
-        weaponsCount: Int,
-        materialsCount: Int,
-        charactersCount: Int,
-        achievementsCount: Int
-    ) {
-        _dataStatus.value = _dataStatus.value.copy(
-            itemsLoaded = itemsLoaded,
-            charactersLoaded = charactersLoaded,
-            weaponsLoaded = itemsLoaded,
-            achievementsLoaded = achievementsLoaded,
-            artifactsCount = artifactsCount,
-            weaponsCount = weaponsCount,
-            materialsCount = materialsCount,
-            charactersCount = charactersCount,
-            achievementsCount = achievementsCount
-        )
-        Log.d(TAG, "Status updated: items=$itemsLoaded chars=$charactersLoaded ach=$achievementsLoaded " +
-                "artifacts=$artifactsCount weapons=$weaponsCount materials=$materialsCount " +
-                "chars=$charactersCount achs=$achievementsCount")
+    override fun publish(status: DataStatus) {
+        _dataStatus.value = status
+        Log.d(TAG, "Status updated: items=${status.itemsLoaded} chars=${status.charactersLoaded} " +
+                "ach=${status.achievementsLoaded} artifacts=${status.artifactsCount} " +
+                "weapons=${status.weaponsCount} materials=${status.materialsCount}")
     }
 
     fun clear() {

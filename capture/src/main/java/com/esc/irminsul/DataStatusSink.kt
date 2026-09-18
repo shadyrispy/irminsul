@@ -6,14 +6,5 @@ package com.esc.irminsul
  * own state holder, keeping the module free of app-level storage.
  */
 interface DataStatusSink {
-    fun updateStatus(
-        itemsLoaded: Boolean,
-        charactersLoaded: Boolean,
-        achievementsLoaded: Boolean,
-        artifactsCount: Int,
-        weaponsCount: Int,
-        materialsCount: Int,
-        charactersCount: Int,
-        achievementsCount: Int
-    )
+    fun publish(status: DataStatus)
 }
