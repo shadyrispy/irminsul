@@ -38,13 +38,7 @@ data class UiState(
     val isPendingStateChange: Boolean = false,
     val showLaunchGameDialog: Boolean = false,
     val showPermissionDialog: Boolean = false,
-    val permissionState: PermissionSnapshot = PermissionSnapshot(
-        notificationGranted = true,
-        headsUpEnabled = true,
-        vpnPermissionGranted = false,
-        batteryOptimizationExempt = true,
-        needsAutoStart = false
-    ),
+    val permissionState: PermissionSnapshot = PermissionSnapshot(),
     val itemsLoaded: Boolean = false,
     val charactersLoaded: Boolean = false,
     val weaponsLoaded: Boolean = false,

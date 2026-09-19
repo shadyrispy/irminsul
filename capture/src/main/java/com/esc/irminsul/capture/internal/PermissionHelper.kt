@@ -19,7 +19,6 @@ internal object PermissionHelper {
      * state, so it returns the public type rather than a private mirror of it.
      */
     fun checkPermissions(context: Context): PermissionSnapshot {
-        CaptureNotifier.ensureCompletionChannel(context)
         val notificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -42,14 +41,19 @@ internal object PermissionHelper {
      * 检查悬浮通知（Heads-up）是否开启
      * Android 8+: 检查通知渠道 importance 是否 >= HIGH
      * Android 8-: 检查全局 heads_up_notifications_enabled 设置
+     *
+     * A missing channel is not a pass. The module creates it during
+     * [com.esc.irminsul.capture.IrminsulCapture.initNative], so by the time a
+     * host reads this it exists — and on ROMs that clamp the importance (EMUI
+     * drops HIGH to DEFAULT and locks it) the host sees the truth instead of a
+     * first-launch "已开启" that contradicts itself a moment later.
      */
     fun isHeadsUpEnabled(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                ?: return true
+                ?: return false
             val channel = manager.getNotificationChannel(CaptureNotifier.CHANNEL_COMPLETE_ID)
-            // 渠道不存在 = 还没创建，创建后默认 HIGH，视为通过
-            channel == null || channel.importance >= NotificationManager.IMPORTANCE_HIGH
+            channel != null && channel.importance >= NotificationManager.IMPORTANCE_HIGH
         } else {
             try {
                 Settings.Secure.getInt(context.contentResolver, "heads_up_notifications_enabled", 1) == 1

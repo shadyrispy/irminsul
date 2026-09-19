@@ -10,10 +10,31 @@ static capture_ctx_t *g_ctx = NULL;
 static volatile int g_running = 0;
 static volatile int g_thread_finished = 0;
 
-static char g_pending_dns_ip[64] = {0};
-static uint16_t g_pending_dns_port = 0;
-static uint8_t g_pending_dns_ipver = 0;
-static volatile int g_dns_pending = 0;
+/*
+ * DNS servers arrive before the capture context exists, so they are parked
+ * here and applied when the thread starts. One slot per family: a single slot
+ * meant the IPv4 server was overwritten by the IPv6 one whenever the network
+ * had both, and the loop then reported "No DNS server configured".
+ */
+typedef struct {
+    char ip[64];
+    uint16_t port;
+    uint8_t ipver;
+    int set;
+} pending_dns_t;
+
+static pending_dns_t g_pending_dns[2];
+
+static int dns_slot_for(uint8_t ipver) { return ipver == 6 ? 1 : 0; }
+
+static void apply_pending_dns(capture_ctx_t *ctx) {
+    for (int i = 0; i < 2; i++) {
+        pending_dns_t *p = &g_pending_dns[i];
+        if (!p->set || !p->ip[0]) continue;
+        capture_set_dns_server(ctx, p->ip, p->port, p->ipver);
+        p->set = 0;
+    }
+}
 
 static void *capture_thread_func(void *arg) {
     capture_ctx_t *ctx = (capture_ctx_t *)arg;
@@ -33,10 +54,7 @@ static void *capture_thread_func(void *arg) {
         return NULL;
     }
 
-    if (g_dns_pending && g_pending_dns_ip[0]) {
-        capture_set_dns_server(ctx, g_pending_dns_ip, g_pending_dns_port, g_pending_dns_ipver);
-        g_dns_pending = 0;
-    }
+    apply_pending_dns(ctx);
 
     __android_log_print(ANDROID_LOG_INFO, TAG, "Capture thread started, tunfd=%d", ctx->tunfd);
     run_vpn_loop(ctx);
@@ -96,14 +114,16 @@ Java_com_esc_irminsul_capture_internal_CaptureService_nativeSetDnsServer(
     const char *dns_str = (*env)->GetStringUTFChars(env, dns_ip, NULL);
     if (!dns_str) return;
 
-    strncpy(g_pending_dns_ip, dns_str, sizeof(g_pending_dns_ip) - 1);
-    g_pending_dns_ip[sizeof(g_pending_dns_ip) - 1] = '\0';
-    g_pending_dns_port = (uint16_t)dns_port;
-    g_pending_dns_ipver = (uint8_t)ipver;
-    g_dns_pending = 1;
+    pending_dns_t *slot = &g_pending_dns[dns_slot_for((uint8_t)ipver)];
+    strncpy(slot->ip, dns_str, sizeof(slot->ip) - 1);
+    slot->ip[sizeof(slot->ip) - 1] = '\0';
+    slot->port = (uint16_t)dns_port;
+    slot->ipver = (uint8_t)ipver;
+    slot->set = 1;
 
     if (g_ctx && g_ctx->jni_env) {
         capture_set_dns_server(g_ctx, dns_str, (uint16_t)dns_port, (uint8_t)ipver);
+        slot->set = 0;
     }
 
     (*env)->ReleaseStringUTFChars(env, dns_ip, dns_str);

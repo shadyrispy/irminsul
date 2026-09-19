@@ -90,5 +90,11 @@ CI runs both: the debug job is `assembleDebug :capture:check`.
   `com.miHoYo.GenshinImpact` / `.Yuanshen` / `.ys.bilibili`.
 - The library posts a foreground-service notification; request
   `POST_NOTIFICATIONS` on Android 13+.
+- **Heads-up may need one manual enable.** Some ROMs (verified on EMUI 10)
+  create a newly requested `IMPORTANCE_HIGH` channel at `DEFAULT` and mark the
+  importance user-locked, so `PermissionSnapshot.headsUpEnabled` can be false on
+  a fresh install and no amount of re-creating the channel will change it.
+  `openFixSettings(PermissionKind.HeadsUp)` opens that channel's settings page,
+  which is the only way through.
 - Decryption keys and the V70 proto schema are embedded in the AAR — publishing
   it publicly distributes that capability.

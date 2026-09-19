@@ -136,7 +136,14 @@ object IrminsulCapture {
      * [start] will not decode anything until this returns [CaptureResult.Ok].
      */
     fun initNative(context: Context): CaptureResult<Unit> {
-        appContext = context.applicationContext
+        val app = context.applicationContext
+        appContext = app
+        // Create the heads-up channel here, once, before any permission read:
+        // createNotificationChannel is asynchronous, and a channel that does not
+        // exist yet cannot be judged. OEM ROMs (EMUI at minimum) also clamp the
+        // requested IMPORTANCE_HIGH down to DEFAULT and lock it, so the honest
+        // answer only exists after the system has settled.
+        CaptureNotifier.ensureCompletionChannel(app)
         NativeLib.initLogging()
         return createSniffer()
     }

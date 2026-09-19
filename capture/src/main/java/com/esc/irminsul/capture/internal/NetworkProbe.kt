@@ -31,9 +31,19 @@ internal object NetworkProbe {
             Log.w(TAG, "No system IPv4 DNS, forwarding to the fallback $FALLBACK_DNS_V4")
         }
 
-    /** Null means this network has no IPv6 DNS, so the VPN skips IPv6. */
+    /**
+     * Null means this network has no usable IPv6 DNS, so the tunnel gets no v6
+     * forwarder. Link-local addresses (routers commonly advertise `fe80::1%wlan0`)
+     * are deliberately excluded: the native side hands the address to
+     * `inet_pton`, which rejects the `%wlan0` scope and would leave the forwarder
+     * as `::` — silently disabling DNS.
+     */
     fun dnsServerV6(context: Context): String? =
-        firstDnsAddress(context) { it is Inet6Address }
+        linkProperties(context)?.dnsServers
+            ?.asSequence()
+            ?.filterIsInstance<Inet6Address>()
+            ?.firstOrNull { !it.isLinkLocalAddress && !it.isAnyLocalAddress && !it.isMulticastAddress }
+            ?.hostAddress?.substringBefore('%')
 
     /** True when the network has a routable IPv6 address (link-local alone is not enough). */
     fun hasIPv6(context: Context): Boolean =

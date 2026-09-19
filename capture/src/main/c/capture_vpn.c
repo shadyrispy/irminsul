@@ -53,7 +53,8 @@ static void init_known_dns_ips() {
     known_dns_ips_count = 0;
     for (int i = 0; KNOWN_DNS_IPS[i] != NULL && known_dns_ips_count < 16; i++) {
         zdtun_ip_t ip;
-        if (zdtun_parse_ip(KNOWN_DNS_IPS[i], &ip) == 0) {
+        // zdtun_parse_ip returns the family (4/6) on success, -1 on failure.
+        if (zdtun_parse_ip(KNOWN_DNS_IPS[i], &ip) > 0) {
             known_dns_ips[known_dns_ips_count++] = ip;
         }
     }
@@ -188,7 +189,11 @@ static void check_dns_req_allowed(zdtun_t *tun, zdtun_conn_t *conn, const zdtun_
             log_error("DNS DNAT v4: no real DNS server configured");
         }
     } else if (tuple->ipver == 6 && is_virtual_dns6(ctx, tuple)) {
-        if (ctx->real_dns_ipver == 6) {
+        // Ask the address itself, not ctx->real_dns_ipver: that one field is
+        // written by both setters, so the last family configured would decide
+        // whether the other one still worked.
+        static const struct in6_addr any6 = IN6ADDR_ANY_INIT;
+        if (memcmp(&ctx->real_dns_ip6.ip6, &any6, sizeof(any6)) != 0) {
             zdtun_conn_dnat(conn, &ctx->real_dns_ip6, htons(DNS_PORT), 6);
             log_info("DNS DNAT v6: redirecting to real DNS server");
         } else {
@@ -301,7 +306,11 @@ void capture_set_dns_server(capture_ctx_t *ctx, const char *dns_ip, uint16_t dns
     if (!ctx || !dns_ip) return;
 
     if (ipver == 4) {
-        zdtun_parse_ip(dns_ip, &ctx->real_dns_ip4);
+        if (zdtun_parse_ip(dns_ip, &ctx->real_dns_ip4) <= 0) {
+            ctx->real_dns_ip4.ip4 = 0;
+            log_error("Unparseable IPv4 DNS server: %s", dns_ip);
+            return;
+        }
         ctx->real_dns_port = dns_port;
         ctx->real_dns_ipver = 4;
 
@@ -309,11 +318,15 @@ void capture_set_dns_server(capture_ctx_t *ctx, const char *dns_ip, uint16_t dns
         inet_ntop(AF_INET, &ctx->real_dns_ip4, ipstr, sizeof(ipstr));
         log_info("Real DNS v4 server set: %s:%d", ipstr, dns_port);
     } else if (ipver == 6) {
-        zdtun_parse_ip(dns_ip, &ctx->real_dns_ip6);
+        if (zdtun_parse_ip(dns_ip, &ctx->real_dns_ip6) <= 0) {
+            memset(&ctx->real_dns_ip6, 0, sizeof(ctx->real_dns_ip6));
+            log_error("Unparseable IPv6 DNS server: %s", dns_ip);
+            return;
+        }
         ctx->real_dns_ipver = 6;
 
         char ipstr[INET6_ADDRSTRLEN];
-        inet_ntop(AF_INET6, &ctx->real_dns_ip6, ipstr, sizeof(ipstr));
+        inet_ntop(AF_INET6, &ctx->real_dns_ip6.ip6, ipstr, sizeof(ipstr));
         log_info("Real DNS v6 server set: %s", ipstr);
     }
 }
