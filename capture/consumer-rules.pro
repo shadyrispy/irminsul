@@ -2,6 +2,8 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
-# Entry points host apps call and the service AGP instantiates by name.
--keep class com.esc.irminsul.CaptureService { *; }
--keep class com.esc.irminsul.NativeLib { *; }
+# libcapture resolves onPacketCaptured / onCaptureStats / protectSocket by name
+# on the service object, and libirminsul finds NativeLib through find_class.
+# Keeping the package (not individual classes) means a later move *within* it
+# cannot leave a stale rule behind.
+-keep class com.esc.irminsul.capture.internal.** { *; }

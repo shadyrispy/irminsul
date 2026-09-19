@@ -16,6 +16,7 @@ import com.esc.irminsul.capture.internal.RawPacket
 import java.util.concurrent.LinkedBlockingQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -94,6 +95,8 @@ object IrminsulCapture {
     private var processor: PacketProcessor? = null
     private var appContext: Context? = null
     private var config = Config()
+    private var activeSource: CaptureSource? = null
+    private var replayJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     init {
@@ -135,9 +138,6 @@ object IrminsulCapture {
     fun initNative(context: Context): CaptureResult<Unit> {
         appContext = context.applicationContext
         NativeLib.initLogging()
-        if (!NativeLib.isAvailable()) {
-            return CaptureResult.Err(CaptureError.NativeUnavailable)
-        }
         return createSniffer()
     }
 
@@ -149,26 +149,19 @@ object IrminsulCapture {
         NativeLib.destroySniffer()
     }
 
-    private fun createSniffer(): CaptureResult<Unit> =
-        when (val code = NativeLib.createSniffer()) {
+    private fun createSniffer(): CaptureResult<Unit> {
+        if (!NativeLib.isAvailable()) {
+            return CaptureResult.Err(CaptureError.NativeUnavailable)
+        }
+        return when (val code = NativeLib.createSniffer()) {
             0 -> CaptureResult.Ok(Unit)
             else -> CaptureResult.Err(CaptureError.SnifferInitFailed(code))
         }
+    }
 
     /** Re-reads every permission the flow can be blocked on. */
-    fun refreshPermissions(context: Context): PermissionSnapshot {
-        val state = PermissionHelper.checkPermissions(context)
-        val snapshot = PermissionSnapshot(
-            notificationGranted = state.notificationGranted,
-            headsUpEnabled = state.headsUpEnabled,
-            vpnPermissionGranted = state.vpnPermissionGranted,
-            batteryOptimizationExempt = state.batteryOptimizationExempt,
-            needsAutoStart = state.needsAutoStart,
-            romHint = PermissionHelper.romHint()
-        )
-        _permissions.value = snapshot
-        return snapshot
-    }
+    fun refreshPermissions(context: Context): PermissionSnapshot =
+        PermissionHelper.checkPermissions(context).also { _permissions.value = it }
 
     /**
      * Opens the best settings page that can grant [kind], falling back through
@@ -195,9 +188,13 @@ object IrminsulCapture {
         PermissionHelper.getVpnPermissionIntent(context)
 
     /**
-     * Begins a capture session from [source] and ends the previous one. Live
-     * progress arrives on [packets] and through [sink]; a session that fails
-     * after this point is reported on [logs] and by [isCapturing] going false.
+     * Begins a capture session from [source], ending the previous one first:
+     * the tunnel is torn down, a running pcap replay is cancelled, the decoded
+     * list and drop counter are cleared, and the native per-session flags
+     * restart so completion can fire again.
+     *
+     * Progress arrives on [packets] and through [sink]. A session that fails
+     * after this call is reported on [logs] and by [isCapturing] going false.
      */
     fun start(
         context: Context,
@@ -206,7 +203,10 @@ object IrminsulCapture {
         config: Config = Config()
     ) {
         appContext = context.applicationContext
+        endActiveSession(context)
+        activeSource = source
         startPipeline(sink, config)
+        NativeLib.resetSession()
         when (source) {
             CaptureSource.Vpn -> ContextCompat.startForegroundService(
                 context,
@@ -218,17 +218,24 @@ object IrminsulCapture {
 
     /** Stops the current session, whether it came from VPN or a pcap replay. */
     fun stop(context: Context) {
-        if (isCapturing.value) {
+        endActiveSession(context)
+        stopPipeline()
+        activeSource = null
+    }
+
+    /**
+     * Tears down whatever [start] set up. Guards on the requested source rather
+     * than [isCapturing], because the service only sets that once the tunnel is
+     * actually up — a stop during VPN setup would otherwise be dropped.
+     */
+    private fun endActiveSession(context: Context) {
+        replayJob?.cancel()
+        replayJob = null
+        if (activeSource is CaptureSource.Vpn || isCapturing.value) {
             context.startService(
                 Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)
             )
         }
-        stopPipeline()
-    }
-
-    /** Gives up a start that never got consent; the only non-service state write. */
-    fun abortStart() {
-        CaptureStatus.setCapturing(false)
     }
 
     /** Drops the decoded-command list, e.g. after the host resets collected data. */
@@ -290,10 +297,10 @@ object IrminsulCapture {
         CaptureService.setPacketQueue(null)
     }
 
-    /** Replays a pcap on a module thread; the queue fills faster than it drains. */
+    /** Replays a pcap on a module thread; cancelled by [stop]. */
     private fun replay(path: String) {
         val worker = processor ?: return
-        scope.launch(Dispatchers.IO) {
+        replayJob = scope.launch(Dispatchers.IO) {
             val packets = worker.readPcapFile(path)
             _logs.tryEmit("pcap replay finished: $packets packets from $path")
         }

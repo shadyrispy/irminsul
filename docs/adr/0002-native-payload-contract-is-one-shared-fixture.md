@@ -62,5 +62,9 @@ outside the pipeline thread, so the reader can be tested without a queue.
 - `parse_error` is present only when true, which the fixture encodes as a third
   command rather than as a comment.
 - The fixture gate runs under `:capture:check`, not `assembleDebug`: a plain
-  debug build stays fast, and CI or a deliberate local run gets both gates.
-- Removing `command_count` is safe: the array length is the count.
+  debug build stays fast. That distinction is only meaningful because CI runs
+  `:capture:check` on every push — a gate nothing executes is a comment.
+- `header_len` is emitted for every command and read by nobody. It stays: the
+  producer (`auto-artifactarium`'s `command_summary_json`) owns the command
+  shape, the fixture records it, and trimming one unused key is not worth
+  changing a contract shared with the pcap harness.

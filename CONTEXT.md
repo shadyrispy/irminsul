@@ -6,10 +6,12 @@ architecture words (module, interface, seam, depth) come from the
 
 ## Capture session
 
-One continuous run of the VPN capture service, from consent-granted start to
-stop. A session owns the session key, the decoded-command ring buffer and the
-collected player data. `IrminsulCapture.start` begins one; `stop` ends it;
-`abortStart` gives up a start whose VPN consent was declined.
+One continuous run of the capture, from consent-granted start to stop. A session
+owns the session key, the decoded-command ring buffer, the drop counter, the
+collected player data and the completion edge. `IrminsulCapture.start` begins
+one — ending the previous session first — and `stop` ends it. Starting a session
+resets the native per-session flags, so a second capture can complete again
+without discarding anything the host already exported.
 
 ## Decoded command
 
@@ -58,7 +60,9 @@ The capture module's interface is `com.esc.irminsul.capture` — the facade
 ## Native contracts
 
 Two things are name-level agreements between the Kotlin and native halves, each
-with a build-time gate: the JNI symbol names (`verifyNativeSymbols`) and the
-keys of the per-packet status JSON
+with a build-time gate: the JNI symbol names, derived from the Kotlin
+`external fun` declarations and diffed against the merged `.so` files
+(`verifyNativeSymbols`), and the keys of the per-packet status JSON
 (`capture/testdata/summary_status.json`, asserted by both `contract_tests` in
-`irminsul-jni` and `StatusDecoderTest`). See `docs/adr/0002`.
+`irminsul-jni` and `StatusDecoderTest`). Both gates run in CI. See
+`docs/adr/0001` and `docs/adr/0002`.

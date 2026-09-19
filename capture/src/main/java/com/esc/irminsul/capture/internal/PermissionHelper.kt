@@ -9,29 +9,16 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import com.esc.irminsul.capture.PermissionKind
+import com.esc.irminsul.capture.PermissionSnapshot
 
 internal object PermissionHelper {
 
     /**
-     * @param requiredGranted 必须权限是否全部通过（通知+悬浮通知+VPN）
-     * @param recommendedGranted 建议权限是否全部通过（电池优化+自启动）
+     * Everything a capture session can be blocked on, judged on the device and
+     * including ROM-specific guidance. This is the module's own reading of the
+     * state, so it returns the public type rather than a private mirror of it.
      */
-    data class PermissionState(
-        val notificationGranted: Boolean,
-        val headsUpEnabled: Boolean,
-        val vpnPermissionGranted: Boolean,
-        val batteryOptimizationExempt: Boolean,
-        val needsAutoStart: Boolean
-    ) {
-        val allRequiredGranted: Boolean
-            get() = notificationGranted && headsUpEnabled && vpnPermissionGranted
-        val allRecommendedGranted: Boolean
-            get() = batteryOptimizationExempt && !needsAutoStart
-        val allGranted: Boolean
-            get() = allRequiredGranted && allRecommendedGranted
-    }
-
-    fun checkPermissions(context: Context): PermissionState {
+    fun checkPermissions(context: Context): PermissionSnapshot {
         CaptureNotifier.ensureCompletionChannel(context)
         val notificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
@@ -40,15 +27,14 @@ internal object PermissionHelper {
             true
         }
 
-        val headsUpEnabled = isHeadsUpEnabled(context)
-        val vpnGranted = isVpnPermissionGranted(context)
-        val batteryExempt = isBatteryOptimizationExempt(context)
-        val needsAutoStart = RomUtils.needsAutoStartGuide() &&
-            RomUtils.getAutoStartSettingsIntent(context) != null
-
-        return PermissionState(
-            notificationGranted, headsUpEnabled, vpnGranted,
-            batteryExempt, needsAutoStart
+        return PermissionSnapshot(
+            notificationGranted = notificationGranted,
+            headsUpEnabled = isHeadsUpEnabled(context),
+            vpnPermissionGranted = isVpnPermissionGranted(context),
+            batteryOptimizationExempt = isBatteryOptimizationExempt(context),
+            needsAutoStart = RomUtils.needsAutoStartGuide() &&
+                RomUtils.getAutoStartSettingsIntent(context) != null,
+            romHint = RomUtils.getRomPermissionTips()
         )
     }
 
@@ -123,9 +109,6 @@ internal object PermissionHelper {
         return Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
             .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
     }
-    /** ROM-specific guidance for the permission dialog; empty on stock Android. */
-    fun romHint(): String = RomUtils.getRomPermissionTips()
-
     /**
      * Ordered settings pages that can grant [kind], best guess first. The
      * ROM-specific variants come before the stock Android ones so a host never

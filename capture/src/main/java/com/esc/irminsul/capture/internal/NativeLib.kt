@@ -92,6 +92,17 @@ internal object NativeLib {
     }
 
     /**
+     * Clears the native per-session flags (collection progress booleans and the
+     * completion edge) without discarding collected player data.
+     */
+    fun resetSession() {
+        ensureLibraryLoaded()
+        if (libraryLoaded) {
+            nativeResetSession()
+        }
+    }
+
+    /**
      * Process a raw packet from VPN capture.
      * Returns a JSON status string with current data counts, or null if no match.
      */
@@ -109,7 +120,7 @@ internal object NativeLib {
      * @param settingsJson JSON string with export settings, or null for defaults.
      * @return GOOD JSON string, or null on failure.
      */
-    fun exportGood(settingsJson: String? = null): String? {
+    fun exportGood(settingsJson: String?): String? {
         ensureLibraryLoaded()
         return if (libraryLoaded) {
             nativeExportGood(settingsJson)
@@ -157,6 +168,9 @@ internal object NativeLib {
 
     @JvmStatic
     private external fun nativeCreateSniffer(): Int
+
+    @JvmStatic
+    private external fun nativeResetSession()
 
     @JvmStatic
     private external fun nativeProcessPacket(packetData: ByteArray): String?

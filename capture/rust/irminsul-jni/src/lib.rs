@@ -341,6 +341,27 @@ fn status_json(payload: &StatusPayload) -> serde_json::Value {
     })
 }
 
+/// Reset the per-session flags without touching collected player data.
+///
+/// Called by the facade at the start of every capture session. The three
+/// `has_*` flags and `completion_notified` are sticky, so without this a
+/// second session in the same process would inherit the first one's
+/// completion and never report its own.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeResetSession(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    if let Some(mut guard) = lock_global_state() {
+        if let Some(state) = guard.as_mut() {
+            state.has_items = false;
+            state.has_avatars = false;
+            state.has_achievements = false;
+            state.completion_notified = false;
+        }
+    }
+}
+
 /// Process a raw IP packet from the VPN capture.
 ///
 /// Returns the packet's status JSON (see [`status_json`]), or null when the

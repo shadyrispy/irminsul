@@ -106,37 +106,53 @@ android {
 
 // The shipped native libraries are part of this module's interface: Kotlin
 // declares each `external fun` by package + class name while C and Rust export
-// it by literal name. A one-sided rename compiles, links, and then fails at
-// runtime with UnsatisfiedLinkError, so assert the pair on every build.
-def nativeSymbols = [
-    'libirminsul.so': [
-        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeInitLogging',
-        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeCreateSniffer',
-        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeProcessPacket',
-        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeCommandBody',
-        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeExportGood',
-        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeExportAchievements',
-        'Java_com_esc_irminsul_capture_internal_NativeLib_nativeDestroySniffer',
-    ],
-    'libcapture.so': [
-        'Java_com_esc_irminsul_capture_internal_CaptureService_nativeRunPacketLoop',
-        'Java_com_esc_irminsul_capture_internal_CaptureService_nativeStopCapture',
-        'Java_com_esc_irminsul_capture_internal_CaptureService_nativeSetDnsServer',
-    ],
-]
+// it by literal name, so a one-sided rename compiles, links, and then fails at
+// runtime with UnsatisfiedLinkError.
+//
+// The expected names are DERIVED from the Kotlin sources rather than copied
+// into a list here: a copied list can only check that the native side kept up,
+// which is half the failure. The one hand-written fact left is which library
+// serves which class — one entry per class, not per symbol.
+def jniLibraryFor = [NativeLib: 'libirminsul.so', CaptureService: 'libcapture.so']
+def jniLibraries = jniLibraryFor.values().toList().unique()
+
+def declaredJniSymbols = { ->
+    def found = [:].withDefault { [] as TreeSet }
+    fileTree(dir: "${projectDir}/src/main/java", include: '**/*.kt').each { File f ->
+        def text = f.text
+        def pkgMatcher = (text =~ /(?m)^package\s+([0-9a-zA-Z_.]+)/)
+        if (!pkgMatcher.find()) return
+        def pkg = pkgMatcher.group(1)
+        def classMatcher = (text =~ /(?m)^(?:internal\s+|private\s+|public\s+)?(?:open\s+|abstract\s+)?(?:class|object)\s+([A-Za-z0-9_]+)/)
+        def owner = null
+        while (classMatcher.find()) {
+            if (jniLibraryFor.containsKey(classMatcher.group(1))) owner = classMatcher.group(1)
+        }
+        if (owner == null) return
+        def funMatcher = (text =~ /(?m)external\s+fun\s+([A-Za-z0-9_]+)/)
+        while (funMatcher.find()) {
+            found[jniLibraryFor[owner]] << "Java_${pkg.replace('.', '_')}_${owner}_${funMatcher.group(1)}"
+        }
+    }
+    found
+}
 
 def nmHost = System.getProperty('os.name').toLowerCase().contains('mac') ? 'darwin-x86_64'
     : (System.getProperty('os.name').toLowerCase().contains('windows') ? 'windows-x86_64' : 'linux-x86_64')
 
 tasks.register('verifyNativeSymbols') {
     group = 'verification'
-    description = 'Checks that every JNI symbol Kotlin declares is exported by the matching .so.'
+    description = 'Checks that the JNI exports in the merged .so files are exactly the external funs Kotlin declares.'
     def merged = layout.buildDirectory.dir('intermediates/merged_native_libs/debug/out/lib/arm64-v8a')
     def nmTool = file("${android.ndkDirectory}/toolchains/llvm/prebuilt/${nmHost}/bin/llvm-nm")
     inputs.dir(merged)
+    inputs.files(fileTree(dir: "${projectDir}/src/main/java", include: '**/*.kt'))
     doLast {
+        def declared = declaredJniSymbols()
         def problems = []
-        nativeSymbols.each { lib, symbols ->
+        def total = 0
+
+        jniLibraries.each { lib ->
             def so = new File(merged.get().asFile, lib)
             if (!so.exists()) {
                 problems << "expected $lib in the merged native libs but it is absent"
@@ -145,17 +161,21 @@ tasks.register('verifyNativeSymbols') {
             def out = providers.exec {
                 commandLine nmTool.absolutePath, '-g', '--defined-only', so.absolutePath
             }.standardOutput.asText.get()
-            symbols.each { sym ->
-                if (!out.contains(sym)) problems << "$lib does not export $sym"
-            }
+            def exported = (out =~ /(?m)^.*\b(Java_com_esc_irminsul\w+)/).collect { it[1] }.toSet()
+            def expected = (declared[lib] ?: []).toSet()
+
+            (expected - exported).each { problems << "$lib does not export $it (declared in Kotlin)" }
+            (exported - expected).each { problems << "$lib exports $it but no Kotlin external fun declares it" }
+            total += expected.size()
         }
+
         if (problems) {
             throw new GradleException(
                 "Native symbol check failed — a Kotlin/native rename was not done in lockstep:\n  " +
                     problems.join("\n  ")
             )
         }
-        logger.lifecycle("Native symbols verified: ${nativeSymbols.values().sum { it.size() }} exports in ${nativeSymbols.size()} libs")
+        logger.lifecycle("Native symbols verified: $total exports declared in Kotlin, found in ${jniLibraries.size()} libs")
     }
 }
 
@@ -184,7 +204,7 @@ tasks.register('verifyNativePayloadContract', Exec) {
     def basePath = System.getenv('PATH') ?: ''
     environment 'PATH', basePath.contains(cargoDir) ? basePath : "${basePath}:${cargoDir}"
     def homeCargo = "${cargoDir}/cargo"
-    commandLine file(homeCargo).exists() ? homeCargo : 'cargo', 'test', '--offline', 'contract_tests'
+    commandLine file(homeCargo).exists() ? homeCargo : 'cargo', 'test', 'contract_tests'
     inputs.dir "${projectDir}/rust/irminsul-jni/src"
     inputs.dir "${projectDir}/testdata"
 }
@@ -203,7 +223,7 @@ afterEvaluate {
                 from components.release
                 groupId = 'com.esc.irminsul'
                 artifactId = 'capture'
-                version = '1.3.0'
+                version = '1.4.0'
                 pom {
                     name = 'Irminsul Capture'
                     description = 'Genshin packet capture, decryption and protobuf ' +

@@ -69,3 +69,29 @@ already arrives on every `DataStatus` publish. `CaptureService`'s private
 - Dead code removed alongside: `CaptureService.isRunning`, the pcap magic byte
   array in `PacketProcessor`, and `MainViewModel.processPcapFileByPath` (no
   caller once `start` took the source).
+
+## Follow-up — the session had to become real (2026-09-19)
+
+A review of the above found that "session" was a word the interface used without
+anything in the code owning it, and every "once per session" claim degraded into
+a level-triggered one:
+
+- `completion` was edge-triggered per **sniffer**, not per session: the sticky
+  flags reset only in `nativeCreateSniffer`, so a second capture in the same
+  process never completed again. `start` now calls `NativeLib.resetSession()`, a
+  native export that clears the three `has_*` flags and the completion edge while
+  leaving collected player data alone.
+- `Config.onDataUpdated` documented "first show up" and fired on every packet,
+  which made the host log `[SUCCESS] Items data captured!` continuously. The
+  pipeline worker (which does live exactly one session) now tracks the edges.
+- `stop()` guarded on `isCapturing`, which the service sets only after
+  `establish()` succeeds, so a stop during VPN setup was dropped; and `start()`
+  claimed to end the previous session while the service just early-returned. The
+  facade now remembers the `CaptureSource` it was given and tears down from that
+  — including cancelling a replay that would otherwise sit in a blocking `put()`
+  forever with its consumer gone.
+- `abortStart()` is gone (see the amendment in `docs/adr/0001`): the host's
+  "waiting for consent" flag is host state, and no module flow edge was ever
+  going to clear it.
+- `droppedPackets` publishes on every drop. `StateFlow` conflates, so the burst
+  throttling it replaced only made the counter lie by up to 99.

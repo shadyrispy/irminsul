@@ -10,53 +10,6 @@ import android.util.Log
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.atomic.AtomicLong
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-
-/**
- * Module-owned capture state: whether a session is live, and how many packets
- * the queue had to drop. Written only here and by the facade's
- * [com.esc.irminsul.capture.IrminsulCapture.abortStart]; read through the
- * facade.
- *
- * Collection progress deliberately does not live here: that state arrives on
- * every [com.esc.irminsul.capture.DataStatus] publish, so mirroring it would
- * give the module a second, unsynchronised source of truth.
- */
-internal object CaptureStatus {
-    private const val TAG = "CaptureStatus"
-
-    private val _isCapturing = MutableStateFlow(false)
-    val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
-
-    fun setCapturing(running: Boolean) {
-        _isCapturing.value = running
-        Log.d(TAG, "Capture status updated: $running")
-    }
-
-    private val dropped = AtomicLong(0)
-    private val _droppedPackets = MutableStateFlow(0L)
-    val droppedPackets: StateFlow<Long> = _droppedPackets.asStateFlow()
-
-    fun resetDroppedPackets() {
-        dropped.set(0)
-        _droppedPackets.value = 0L
-    }
-
-    /**
-     * Publishes in bursts: a saturated queue drops one packet per game packet,
-     * and emitting each one would redraw every collector watching.
-     */
-    fun recordDroppedPacket() {
-        val total = dropped.incrementAndGet()
-        if (total == 1L || total % 100L == 0L) {
-            _droppedPackets.value = total
-            Log.w(TAG, "Packet queue saturated, $total packets dropped so far")
-        }
-    }
-}
 
 /**
  * Instantiated by the framework from the manifest, and its
@@ -108,10 +61,6 @@ class CaptureService : VpnService() {
             val queued = _packetQueue?.offer(RawPacket(packetData, System.currentTimeMillis()))
             if (queued == false) CaptureStatus.recordDroppedPacket()
         }
-
-        internal val packetQueue: LinkedBlockingQueue<RawPacket>?
-            @Synchronized
-            get() = _packetQueue
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null

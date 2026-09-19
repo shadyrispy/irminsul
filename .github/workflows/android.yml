@@ -18,7 +18,7 @@ jobs:
       matrix:
         include:
           - build_type: debug
-            gradle_task: assembleDebug
+            gradle_task: assembleDebug :capture:check
             artifact_name: irminsul-debug.apk
             apk_path: app/build/outputs/apk/debug/app-debug.apk
           - build_type: release

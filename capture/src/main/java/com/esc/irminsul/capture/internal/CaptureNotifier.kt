@@ -161,8 +161,4 @@ internal object CaptureNotifier {
         bytes < 1024 * 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024))
         else -> String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024))
     }
-
-    private fun Log_e(message: String, error: Throwable? = null) {
-        android.util.Log.e(TAG, message, error)
-    }
 }

@@ -1,7 +1,7 @@
 # 1. The capture module's public interface is its package edge
 
 Date: 2026-09-18
-Status: accepted
+Status: accepted, amended 2026-09-19 (see "Amendments")
 
 ## Context
 
@@ -53,11 +53,14 @@ host getting an exemption.
   them **in the same commit**, or the app fails at runtime with
   `UnsatisfiedLinkError` while compiling and linking cleanly.
 - `:capture`'s `verifyNativeSymbols` task enforces that pairing on every
-  `assembleDebug` (NDK `llvm-nm` against the merged `.so` files) and fails if
-  either library is missing from the merge.
-- Capture state has one writer: the service, surfaced through the facade.
-  `abortStart()` exists so a host declining VPN consent can abandon a start
-  without writing module state.
+  `assembleDebug`: it derives the expected `Java_…` names from the Kotlin
+  `external fun` declarations and diffs them against `llvm-nm` output for the
+  merged `.so` files, in both directions — a name exported by native but no
+  longer declared in Kotlin fails too. See the amendment below for why the list
+  is derived rather than written out.
+- Capture state has one writer: the service, surfaced through the facade. A host
+  that declines VPN consent resets its own optimistic UI flag rather than
+  writing module state (see `docs/adr/0003`).
 - The completion notification and its channel belong to the module; a host that
   renders its own UI opts out with `Config(completionNotification = false)`.
 - ROM-specific settings chains moved into `PermissionHelper.fixIntents`;
@@ -74,3 +77,27 @@ Whether the facade should become a constructed session object with a single
 typed, and whether the three error conventions should collapse into one are
 separate candidates from the same architecture review; this ADR does not
 pre-commit their shapes, only where the seam is.
+
+## Amendments — 2026-09-19
+
+The Decision section above lists the public types as of 1.2.0. Two of them no
+longer exist, and the seam has grown; the current list is the one in
+`CONTEXT.md` ("Seam"):
+
+- **Removed** — `PacketLog` (its mutators made the host a second writer of the
+  decoded list; `IrminsulCapture.packets` is now a read-only `StateFlow` over an
+  internal ring buffer) and `InitResult` (replaced by `CaptureResult`).
+- **Added** — `CaptureSource`, `CaptureResult` / `CaptureError`.
+- **Also superseded** — the two questions this ADR left open are decided by
+  `docs/adr/0002` (payload contract) and `docs/adr/0003` (one start, one result
+  type). The "constructed session object" option was rejected there; the facade
+  stays a singleton because the native sniffer is process-global.
+- **`abortStart()` removed** — on the decline path the module's `isCapturing`
+  was never true, so the call could not produce the state change hosts were
+  relying on; the host now resets its own pending flag.
+- **`verifyNativeSymbols` now derives its expectations** from the Kotlin sources
+  instead of a hand-copied list of names. The list could only prove the native
+  side had kept up, which is half the failure; and `consumer-rules.pro` had kept
+  `-keep` lines for two pre-move class names, which no gate could see because
+  R8 only runs in a host's release build. Consumer rules now keep the internal
+  package as a whole.

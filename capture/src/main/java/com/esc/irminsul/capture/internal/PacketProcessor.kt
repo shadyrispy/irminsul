@@ -1,6 +1,7 @@
 package com.esc.irminsul.capture.internal
 
 import android.util.Log
+import com.esc.irminsul.capture.DataStatus
 import com.esc.irminsul.capture.DataStatusSink
 
 import java.io.FileInputStream
@@ -16,7 +17,7 @@ internal class RawPacket(val data: ByteArray, val timestampMillis: Long)
  * decoder and publishes what comes back. Owns no state a host can write.
  */
 internal class PacketProcessor(
-    private val dataStore: DataStatusSink,
+    private val sink: DataStatusSink,
     private val packetLog: PacketRingBuffer,
     private val packetQueue: BlockingQueue<RawPacket>,
     private val onDataUpdate: (items: Boolean, characters: Boolean, achievements: Boolean) -> Unit
@@ -34,6 +35,10 @@ internal class PacketProcessor(
 
     @Volatile
     private var running = true
+
+    private var notifiedItems = false
+    private var notifiedCharacters = false
+    private var notifiedAchievements = false
 
     init {
         name = "PacketProcessor"
@@ -58,14 +63,35 @@ internal class PacketProcessor(
             val statusJson = NativeLib.processPacket(packet.data) ?: return
             val update = StatusDecoder.decode(statusJson, packet.timestampMillis) ?: return
             packetLog.appendAll(update.records)
-            dataStore.publish(update.status)
-            with(update.status) {
-                if (itemsLoaded || charactersLoaded || achievementsLoaded) {
-                    onDataUpdate(itemsLoaded, charactersLoaded, achievementsLoaded)
-                }
-            }
+            sink.publish(update.status)
+            notifyNewCategories(update.status)
         } catch (e: Exception) {
             Log.w(TAG, "Error processing packet", e)
+        }
+    }
+
+    /**
+     * [com.esc.irminsul.capture.IrminsulCapture.Config.onDataUpdated] means
+     * "this category has just arrived", so each category is reported once: this
+     * worker lives for exactly one session, and the flags it reads are sticky
+     * within it.
+     */
+    private fun notifyNewCategories(status: DataStatus) {
+        var fresh = false
+        if (status.itemsLoaded && !notifiedItems) {
+            notifiedItems = true
+            fresh = true
+        }
+        if (status.charactersLoaded && !notifiedCharacters) {
+            notifiedCharacters = true
+            fresh = true
+        }
+        if (status.achievementsLoaded && !notifiedAchievements) {
+            notifiedAchievements = true
+            fresh = true
+        }
+        if (fresh) {
+            onDataUpdate(status.itemsLoaded, status.charactersLoaded, status.achievementsLoaded)
         }
     }
 
@@ -79,11 +105,10 @@ internal class PacketProcessor(
         }
     }
 
-    // --- PCAP file reading ---
-
     /**
      * Feeds a saved pcap into the queue, blocking while the queue is full so a
-     * complete import never drops packets. Call off the main thread.
+     * complete import never drops packets. Call off the main thread; interrupting
+     * the caller's thread stops the replay.
      *
      * @return how many packets were handed to the decoder.
      */
@@ -140,6 +165,9 @@ internal class PacketProcessor(
                     fed++
                 }
             }
+        } catch (e: InterruptedException) {
+            // A cancelled replay is a normal end of session, not an error.
+            currentThread().interrupt()
         } catch (e: Exception) {
             Log.e(TAG, "Error reading PCAP file", e)
         }

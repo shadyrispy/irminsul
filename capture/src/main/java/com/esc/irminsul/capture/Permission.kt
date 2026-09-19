@@ -39,10 +39,6 @@ data class PermissionSnapshot(
 ) {
     val allRequiredGranted: Boolean
         get() = notificationGranted && headsUpEnabled && vpnPermissionGranted
-    val allRecommendedGranted: Boolean
-        get() = batteryOptimizationExempt && !needsAutoStart
-    val allGranted: Boolean
-        get() = allRequiredGranted && allRecommendedGranted
 }
 
 /** Everything the pipeline collected once the game's data is complete. */

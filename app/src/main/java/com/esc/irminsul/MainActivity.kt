@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
             checkNotificationPermissionAndStartCapture()
         } else {
             viewModel.addLog("VPN permission denied")
-            IrminsulCapture.abortStart()
+            viewModel.captureStartAbandoned()
         }
     }
 

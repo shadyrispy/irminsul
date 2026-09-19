@@ -320,6 +320,15 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
     }
 
+    /**
+     * VPN consent was declined, so the capture never started. [toggleCapture]
+     * set the optimistic UI state; this undoes it. The module's own
+     * `isCapturing` never went true, so no flow edge will come to do it.
+     */
+    fun captureStartAbandoned() {
+        _uiState.value = _uiState.value.copy(isCapturing = false, isPendingStateChange = false)
+    }
+
     fun startVpnCapture() {
         Log.d(TAG, "Starting VPN capture")
         isAutoStopping = false
