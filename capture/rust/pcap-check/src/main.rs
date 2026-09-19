@@ -8,7 +8,8 @@ use std::{collections::HashMap, fs, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
 use auto_artifactarium::{
-    matches_achievement_packet, matches_avatar_packet, matches_item_packet, GamePacket, GameSniffer,
+    matches_achievement_packet, matches_avatar_packet, matches_item_packet, GamePacket,
+    GameSniffer, PacketDirection,
 };
 use base64::Engine;
 use serde_json::Value;
@@ -160,9 +161,10 @@ fn main() -> Result<()> {
                     total_commands += 1;
                     let s = cmd.summary_json();
                     println!(
-                        "[cmd] #{fed} id={} {} header_len={} size={} field_count={:?} err={}",
+                        "[cmd] #{fed} id={} {} {} header_len={} size={} field_count={:?} err={}",
                         cmd.command_id,
                         s.get("name").and_then(Value::as_str).unwrap_or("?"),
+                        if cmd.direction == PacketDirection::Sent { "C2S" } else { "S2C" },
                         cmd.header_len,
                         cmd.data_len,
                         s.get("field_count"),
