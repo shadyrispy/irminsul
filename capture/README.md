@@ -45,7 +45,7 @@ IrminsulCapture.abortStart()                                // consent declined
 IrminsulCapture.close()
 
 IrminsulCapture.packets: StateFlow<List<PacketRecord>>      // ring buffer, newest last, read-only
-IrminsulCapture.isCapturing / logs / completion / permissions
+IrminsulCapture.isCapturing / droppedPackets / logs / completion / permissions
 IrminsulCapture.commandBody(packetId, commandIndex)         // full proto body JSON, on demand
 IrminsulCapture.exportGood(settingsJson) / exportAchievements(format)
 ```
@@ -80,6 +80,10 @@ Two gates, because the module has two contracts with its own native code:
 ## Constraints
 
 - **One VPN at a time** (Android): starting here disconnects any other tunnel.
+- **A live capture drops, an import does not**: the decode pipeline cannot slow
+  the native capture thread, so when `Config.queueCapacity` fills, packets are
+  dropped and counted in `droppedPackets`. A `CaptureSource.File` replay blocks
+  until the queue drains instead.
 - **arm64-v8a only**; the game client packages captured are
   `com.miHoYo.GenshinImpact` / `.Yuanshen` / `.ys.bilibili`.
 - The library posts a foreground-service notification; request

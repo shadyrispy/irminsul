@@ -89,6 +89,9 @@ class SampleActivity : ComponentActivity() {
                 launch {
                     IrminsulCapture.packets.collect { render() }
                 }
+                launch {
+                    IrminsulCapture.droppedPackets.collect { render() }
+                }
             }
         }
     }
@@ -142,6 +145,8 @@ class SampleActivity : ComponentActivity() {
         statusView.text = buildString {
             append("capturing=").append(IrminsulCapture.isCapturing.value)
             append("  decoded=").append(decoded)
+            val dropped = IrminsulCapture.droppedPackets.value
+            if (dropped > 0) append("  dropped=").append(dropped)
             if (latest != null) {
                 append("\nlast: ").append(latest.name)
                 append(" (").append(latest.cmdId).append(")")

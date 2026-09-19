@@ -1,35 +1,25 @@
 package com.esc.irminsul.capture.internal
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Context
 import android.content.Intent
-import android.graphics.Color
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import com.esc.irminsul.capture.R
-import java.net.Inet4Address
-import java.net.Inet6Address
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Whether a capture session is live. Written only by [CaptureService] (and by
- * the facade's [com.esc.irminsul.capture.IrminsulCapture.abortStart] when a
- * start never got consent); collected through the facade's `isCapturing`.
+ * Module-owned capture state: whether a session is live, and how many packets
+ * the queue had to drop. Written only here and by the facade's
+ * [com.esc.irminsul.capture.IrminsulCapture.abortStart]; read through the
+ * facade.
  *
  * Collection progress deliberately does not live here: that state arrives on
  * every [com.esc.irminsul.capture.DataStatus] publish, so mirroring it would
@@ -45,27 +35,37 @@ internal object CaptureStatus {
         _isCapturing.value = running
         Log.d(TAG, "Capture status updated: $running")
     }
-}
 
-/**
- * Intent that brings the host app's own launcher activity to the front. The
- * capture module cannot reference an app activity by class, so it resolves the
- * package launcher instead.
- */
-private fun launchIntentFor(context: Context): Intent =
-    context.packageManager.getLaunchIntentForPackage(context.packageName)
-        ?.addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP
-        )
-        ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+    private val dropped = AtomicLong(0)
+    private val _droppedPackets = MutableStateFlow(0L)
+    val droppedPackets: StateFlow<Long> = _droppedPackets.asStateFlow()
+
+    fun resetDroppedPackets() {
+        dropped.set(0)
+        _droppedPackets.value = 0L
+    }
+
+    /**
+     * Publishes in bursts: a saturated queue drops one packet per game packet,
+     * and emitting each one would redraw every collector watching.
+     */
+    fun recordDroppedPacket() {
+        val total = dropped.incrementAndGet()
+        if (total == 1L || total % 100L == 0L) {
+            _droppedPackets.value = total
+            Log.w(TAG, "Packet queue saturated, $total packets dropped so far")
+        }
+    }
+}
 
 /**
  * Instantiated by the framework from the manifest, and its
  * `onPacketCaptured` / `onCaptureStats` / `protectSocket` members are looked up
  * by name from libcapture, so this class and those members cannot be `internal`
  * (Kotlin mangles internal member names, which would break the lookup).
+ *
+ * Its job is the tunnel and the packet hand-off. Notifications live in
+ * [CaptureNotifier] and network discovery in [NetworkProbe].
  */
 class CaptureService : VpnService() {
 
@@ -73,10 +73,6 @@ class CaptureService : VpnService() {
         private const val TAG = "CaptureService"
         const val ACTION_START = "com.esc.irminsul.START_CAPTURE"
         const val ACTION_STOP = "com.esc.irminsul.STOP_CAPTURE"
-        const val NOTIFICATION_CHANNEL_COMPLETE_ID = "irminsul_complete_v2"
-        const val NOTIFICATION_ID_COMPLETE = 2
-        private const val NOTIFICATION_CHANNEL_ID = "irminsul_capture"
-        private const val NOTIFICATION_ID = 1
 
         private const val VPN_MTU = 1500
         private const val VPN_IP4_ADDRESS = "10.215.173.1"
@@ -86,13 +82,13 @@ class CaptureService : VpnService() {
         private const val VPN_IP6_PREFIX = 128
         private const val VPN_IP6_DNS_SERVER = "fd00:2:fd00:1:fd00:1:fd00:2"
 
+        private const val NOTIFICATION_ID_CAPTURE = 1
+
         private val TARGET_PACKAGES = listOf(
             "com.miHoYo.GenshinImpact",
             "com.miHoYo.Yuanshen",
             "com.miHoYo.ys.bilibili"
         )
-
-        private val FALLBACK_DNS_LIST = listOf("223.5.5.5", "119.29.29.29", "114.114.114.114")
 
         @Volatile
         private var _packetQueue: LinkedBlockingQueue<RawPacket>? = null
@@ -102,83 +98,20 @@ class CaptureService : VpnService() {
             _packetQueue = queue
         }
 
+        /**
+         * Hands one captured packet to the decode pipeline. Non-blocking by
+         * necessity — this runs on the native capture thread — so a saturated
+         * queue drops, which [CaptureStatus] counts.
+         */
         @Synchronized
         internal fun offerPacket(packetData: ByteArray) {
-            _packetQueue?.offer(RawPacket(packetData, System.currentTimeMillis()))
+            val queued = _packetQueue?.offer(RawPacket(packetData, System.currentTimeMillis()))
+            if (queued == false) CaptureStatus.recordDroppedPacket()
         }
 
         internal val packetQueue: LinkedBlockingQueue<RawPacket>?
             @Synchronized
             get() = _packetQueue
-
-        fun showCompletionNotification(
-            context: Context,
-            charactersCount: Int,
-            artifactsCount: Int,
-            weaponsCount: Int,
-            achievementsCount: Int
-        ) {
-            Log.d(TAG, "showCompletionNotification: chars=$charactersCount artifacts=$artifactsCount weapons=$weaponsCount achievements=$achievementsCount")
-
-            val manager = context.getSystemService(NotificationManager::class.java)
-            if (manager == null) {
-                Log.e(TAG, "NotificationManager is null")
-                return
-            }
-
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_COMPLETE_ID,
-                context.getString(R.string.notification_channel_complete_name),
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = context.getString(R.string.notification_channel_complete_desc)
-                setShowBadge(true)
-                enableLights(true)
-                lightColor = Color.GREEN
-                setBypassDnd(false)
-            }
-            manager.createNotificationChannel(channel)
-
-            val fullScreenPendingIntent = PendingIntent.getActivity(
-                context, 1,
-                launchIntentFor(context),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val contentPendingIntent = PendingIntent.getActivity(
-                context, 0,
-                launchIntentFor(context),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val content = context.getString(R.string.notification_complete_content, charactersCount, artifactsCount, weaponsCount, achievementsCount)
-
-            val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_COMPLETE_ID)
-                .setContentTitle(context.getString(R.string.notification_complete_title))
-                .setContentText(content)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(content))
-                .setSmallIcon(R.drawable.ic_stat_capture)
-                .setContentIntent(contentPendingIntent)
-                .setFullScreenIntent(fullScreenPendingIntent, true)
-                .setAutoCancel(true)
-                .setCategory(NotificationCompat.CATEGORY_EVENT)
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setDefaults(NotificationCompat.DEFAULT_ALL)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .build()
-
-            try {
-                manager.notify(NOTIFICATION_ID_COMPLETE, notification)
-                Log.d(TAG, "Completion notification sent, id=$NOTIFICATION_ID_COMPLETE, fullScreenIntent=$fullScreenPendingIntent")
-            } catch (e: SecurityException) {
-                Log.e(TAG, "Failed to post notification - permission missing?", e)
-            }
-        }
-
-        fun cancelCompletionNotification(context: Context) {
-            val manager = context.getSystemService(NotificationManager::class.java) ?: return
-            manager.cancel(NOTIFICATION_ID_COMPLETE)
-        }
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -220,21 +153,21 @@ class CaptureService : VpnService() {
             return
         }
 
-        createNotificationChannel()
-        val notification = buildNotification(0, 0, 0)
-        startForeground(NOTIFICATION_ID, notification)
+        CaptureNotifier.ensureCaptureChannel(this)
+        startForeground(
+            NOTIFICATION_ID_CAPTURE,
+            CaptureNotifier.buildCaptureNotification(this, 0, 0, 0)
+        )
 
-        val realDnsV4 = getSystemDnsServerV4()
-        val realDnsV6 = getSystemDnsServerV6()
-        val hasIPv6 = hasIPv6Connectivity()
-        val privateDnsMode = getPrivateDnsMode()
-        val networkType = getNetworkType()
-        Log.d(TAG, "=== VPN Startup Diagnostics ===")
-        Log.d(TAG, "Network type: $networkType")
-        Log.d(TAG, "System DNS v4: $realDnsV4, v6: $realDnsV6")
-        Log.d(TAG, "IPv6 connectivity: $hasIPv6")
-        Log.d(TAG, "Private DNS mode: $privateDnsMode")
-        Log.d(TAG, "MTU: $VPN_MTU")
+        val realDnsV4 = NetworkProbe.dnsServerV4(this)
+        val realDnsV6 = NetworkProbe.dnsServerV6(this)
+        val hasIPv6 = NetworkProbe.hasIPv6(this)
+        Log.d(
+            TAG,
+            "=== VPN startup: ${NetworkProbe.networkType(this)}, " +
+                "dns v4=$realDnsV4 v6=${realDnsV6 ?: "none"}, " +
+                "ipv6=$hasIPv6, privateDns=${NetworkProbe.privateDnsMode(this)}, mtu=$VPN_MTU"
+        )
 
         val builder = Builder()
         builder.setMtu(VPN_MTU)
@@ -262,13 +195,7 @@ class CaptureService : VpnService() {
         }
 
         builder.setSession("Irminsul")
-
-        val configureIntent = launchIntentFor(this)
-        builder.setConfigureIntent(PendingIntent.getActivity(
-            this, 0, configureIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        ))
-
+        builder.setConfigureIntent(CaptureNotifier.hostLaunchIntent(this))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
         }
@@ -347,166 +274,12 @@ class CaptureService : VpnService() {
         }
     }
 
-    private fun getSystemDnsServerV4(): String {
-        try {
-            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-            val network = cm.activeNetwork
-            if (network != null) {
-                val lp = cm.getLinkProperties(network)
-                if (lp != null) {
-                    for (addr in lp.dnsServers) {
-                        if (addr is Inet4Address) {
-                            val ip = addr.hostAddress
-                            if (ip != null) {
-                                Log.d(TAG, "Found system IPv4 DNS: $ip")
-                                return ip
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to get system IPv4 DNS", e)
-        }
-
-        for (dns in FALLBACK_DNS_LIST) {
-            Log.w(TAG, "No system IPv4 DNS found, trying fallback: $dns")
-            return dns
-        }
-        return FALLBACK_DNS_LIST.first()
-    }
-
-    private fun getSystemDnsServerV6(): String? {
-        try {
-            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-            val network = cm.activeNetwork
-            if (network != null) {
-                val lp = cm.getLinkProperties(network)
-                if (lp != null) {
-                    for (addr in lp.dnsServers) {
-                        if (addr is Inet6Address) {
-                            val ip = addr.hostAddress
-                            if (ip != null) {
-                                Log.d(TAG, "Found system IPv6 DNS: $ip")
-                                return ip
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to get system IPv6 DNS", e)
-        }
-
-        Log.w(TAG, "No system IPv6 DNS found, IPv6 will be disabled")
-        return null
-    }
-
-    private fun hasIPv6Connectivity(): Boolean {
-        return try {
-            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-            val network = cm.activeNetwork
-            if (network != null) {
-                val lp = cm.getLinkProperties(network)
-                if (lp != null) {
-                    return lp.linkAddresses.any { it.address is Inet6Address && !it.address.isLinkLocalAddress }
-                }
-            }
-            false
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to check IPv6 connectivity", e)
-            false
-        }
-    }
-
-    private fun getPrivateDnsMode(): String {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-                val network = cm.activeNetwork
-                if (network != null) {
-                    val lp = cm.getLinkProperties(network)
-                    if (lp != null) {
-                        return when {
-                            lp.privateDnsServerName != null -> "strict (${lp.privateDnsServerName})"
-                            lp.isPrivateDnsActive -> "opportunistic"
-                            else -> "off"
-                        }
-                    }
-                }
-            }
-            "unknown"
-        } catch (e: Exception) {
-            "error: ${e.message}"
-        }
-    }
-
-    private fun getNetworkType(): String {
-        return try {
-            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-            val network = cm.activeNetwork
-            if (network != null) {
-                val caps = cm.getNetworkCapabilities(network)
-                if (caps != null) {
-                    return when {
-                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "WiFi"
-                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "Cellular"
-                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
-                        else -> "Other"
-                    }
-                }
-            }
-            "No active network"
-        } catch (e: Exception) {
-            "error: ${e.message}"
-        }
-    }
-
     private fun updateNotification() {
         if (!CaptureStatus.isCapturing.value) return
-        val notification = buildNotification(bytesSent, bytesReceived, numConnections)
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIFICATION_ID, notification)
-    }
-
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            NOTIFICATION_CHANNEL_ID,
-            getString(R.string.notification_channel_capture_name),
-            NotificationManager.IMPORTANCE_DEFAULT
-        ).apply {
-            description = getString(R.string.notification_channel_capture_desc)
-            setShowBadge(false)
-        }
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
-    }
-
-    private fun buildNotification(sent: Long, received: Long, connections: Int): Notification {
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0,
-            launchIntentFor(this),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        CaptureNotifier.notifyCapture(
+            this,
+            CaptureNotifier.buildCaptureNotification(this, bytesSent, bytesReceived, numConnections)
         )
-
-        val totalBytes = sent + received
-        val bytesStr = formatBytes(totalBytes)
-        val text = "↑${formatBytes(sent)} ↓${formatBytes(received)} | ${getString(R.string.notification_capture_connections, connections)}"
-
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Irminsul - $bytesStr")
-            .setContentText(text)
-            .setSmallIcon(R.drawable.ic_stat_capture)
-            .setOngoing(true)
-            .setContentIntent(pendingIntent)
-            .build()
-    }
-
-    private fun formatBytes(bytes: Long): String {
-        if (bytes < 1024) return "$bytes B"
-        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0)
-        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024))
-        return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024))
     }
 
     override fun onDestroy() {

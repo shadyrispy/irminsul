@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.esc.irminsul.capture.internal.CaptureNotifier
 import com.esc.irminsul.capture.internal.CaptureService
 import com.esc.irminsul.capture.internal.CaptureStatus
 import com.esc.irminsul.capture.internal.NativeLib
@@ -56,6 +57,14 @@ object IrminsulCapture {
     val isCapturing: StateFlow<Boolean>
         get() = CaptureStatus.isCapturing
 
+    /**
+     * Packets dropped because [Config.queueCapacity] filled up since the
+     * session started. Live capture never blocks the capture thread, so a
+     * decoder that falls behind shows up here rather than silently.
+     */
+    val droppedPackets: StateFlow<Long>
+        get() = CaptureStatus.droppedPackets
+
     /** Diagnostic lines forwarded from the native stack. No replay. */
     private val _logs = MutableSharedFlow<String>(extraBufferCapacity = 256)
     val logs: SharedFlow<String> = _logs.asSharedFlow()
@@ -69,6 +78,11 @@ object IrminsulCapture {
     val permissions: StateFlow<PermissionSnapshot> = _permissions.asStateFlow()
 
     data class Config(
+        /**
+         * Pending packets. Live capture drops what does not fit (see
+         * [droppedPackets]); a [CaptureSource.File] replay blocks instead, so an
+         * import never loses data.
+         */
         val queueCapacity: Int = 10_000,
         /** Post the "all data collected" notification when the native stack reports it. */
         val completionNotification: Boolean = true,
@@ -105,7 +119,7 @@ object IrminsulCapture {
                 )
                 if (config.completionNotification) {
                     appContext?.let {
-                        CaptureService.showCompletionNotification(
+                        CaptureNotifier.showCompletion(
                             it, characterCount, artifactCount, weaponCount, achievementCount
                         )
                     }
@@ -242,10 +256,10 @@ object IrminsulCapture {
 
     /** Posts the completion notification with sample counts, for testing heads-up. */
     fun showCompletionPreview(context: Context) {
-        CaptureService.showCompletionNotification(context, 1, 2, 3, 4)
+        CaptureNotifier.showCompletion(context, 1, 2, 3, 4)
         scope.launch {
             delay(5_000)
-            CaptureService.cancelCompletionNotification(context)
+            CaptureNotifier.cancelCompletion(context)
         }
     }
 
@@ -261,6 +275,7 @@ object IrminsulCapture {
         this.config = config
         _completion.value = null
         ring.clear()
+        CaptureStatus.resetDroppedPackets()
         val queue = LinkedBlockingQueue<RawPacket>(config.queueCapacity)
         val worker = PacketProcessor(sink, ring, queue, config.onDataUpdated)
         processor = worker
