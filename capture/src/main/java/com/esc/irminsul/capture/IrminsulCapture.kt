@@ -87,7 +87,10 @@ object IrminsulCapture {
         val queueCapacity: Int = 10_000,
         /** Post the "all data collected" notification when the native stack reports it. */
         val completionNotification: Boolean = true,
-        /** Fired whenever items / characters / achievements first show up. */
+        /**
+         * Fired once per category, with only the categories that just arrived
+         * set to true — a later arrival does not re-report the earlier ones.
+         */
         val onDataUpdated: (items: Boolean, characters: Boolean, achievements: Boolean) -> Unit =
             { _, _, _ -> }
     )

@@ -72,27 +72,20 @@ internal class PacketProcessor(
 
     /**
      * [com.esc.irminsul.capture.IrminsulCapture.Config.onDataUpdated] means
-     * "this category has just arrived", so each category is reported once: this
-     * worker lives for exactly one session, and the flags it reads are sticky
-     * within it.
+     * "this category has just arrived", so the callback carries only the
+     * categories that are new — passing the current state instead made a host
+     * that logs each true flag repeat itself on every later arrival. This
+     * worker lives for exactly one session, so its edges are session edges.
      */
     private fun notifyNewCategories(status: DataStatus) {
-        var fresh = false
-        if (status.itemsLoaded && !notifiedItems) {
-            notifiedItems = true
-            fresh = true
-        }
-        if (status.charactersLoaded && !notifiedCharacters) {
-            notifiedCharacters = true
-            fresh = true
-        }
-        if (status.achievementsLoaded && !notifiedAchievements) {
-            notifiedAchievements = true
-            fresh = true
-        }
-        if (fresh) {
-            onDataUpdate(status.itemsLoaded, status.charactersLoaded, status.achievementsLoaded)
-        }
+        val newItems = status.itemsLoaded && !notifiedItems
+        val newCharacters = status.charactersLoaded && !notifiedCharacters
+        val newAchievements = status.achievementsLoaded && !notifiedAchievements
+        if (!newItems && !newCharacters && !newAchievements) return
+        if (newItems) notifiedItems = true
+        if (newCharacters) notifiedCharacters = true
+        if (newAchievements) notifiedAchievements = true
+        onDataUpdate(newItems, newCharacters, newAchievements)
     }
 
     fun stopProcessor() {
