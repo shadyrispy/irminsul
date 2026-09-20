@@ -13,6 +13,25 @@ one — ending the previous session first — and `stop` ends it. Starting a ses
 resets the native per-session flags, so a second capture can complete again
 without discarding anything the host already exported.
 
+## Session phase
+
+`SessionPhase`: where a session stands — `Idle`, `AwaitingLogin`, `Collecting`,
+`Complete` — derived from the tunnel, the decoded commands and the completion
+edge, never stored. Its reason for existing is the **blind session**:
+`AwaitingLogin` while `CaptureTraffic` moves means game traffic the session
+cannot decrypt, which is otherwise indistinguishable from a game that is simply
+not playing.
+
+## Force re-login
+
+The only cure for a blind session, because the key comes from a handshake that
+already happened: `forceRelogin` closes the game and reopens it so its login
+runs inside the tunnel. Measured on a live client, neither a black-holed tunnel
+nor a short outage does this — the client *resumes* with the old key. It reaches
+a backgrounded game only (`killBackgroundProcesses` cannot touch a foreground
+process), so a host that shows the game may have to restart it by hand.
+`Config.autoForceRelogin` makes the module do it on its own.
+
 ## Decoded command
 
 One game command recovered from the session's traffic: a `PacketRecord` with
@@ -54,8 +73,9 @@ a special case.
 The capture module's interface is `com.esc.irminsul.capture` — the facade
 `IrminsulCapture` plus `DataStatus`, `DataStatusSink`, `PacketRecord`,
 `CaptureSource`, `CaptureResult`/`CaptureError`, `PermissionSnapshot`,
-`PermissionKind`, `Completion`. Everything else lives in
-`com.esc.irminsul.capture.internal` and is `internal`; see `docs/adr/0001`.
+`PermissionKind`, `Completion`, `SessionPhase` and `CaptureTraffic`. Everything
+else lives in `com.esc.irminsul.capture.internal` and is `internal`; see
+`docs/adr/0001`.
 
 ## Native contracts
 

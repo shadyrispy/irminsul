@@ -8,6 +8,7 @@ import com.esc.irminsul.capture.IrminsulCapture
 import com.esc.irminsul.capture.PacketRecord
 import com.esc.irminsul.capture.PermissionKind
 import com.esc.irminsul.capture.PermissionSnapshot
+import com.esc.irminsul.capture.SessionPhase
 import com.esc.irminsul.capture.R as CaptureR
 import android.app.Activity
 import android.content.ClipData
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -38,6 +40,7 @@ data class UiState(
     val isPendingStateChange: Boolean = false,
     val showLaunchGameDialog: Boolean = false,
     val showPermissionDialog: Boolean = false,
+    val showReloginDialog: Boolean = false,
     val permissionState: PermissionSnapshot = PermissionSnapshot(),
     val itemsLoaded: Boolean = false,
     val charactersLoaded: Boolean = false,
@@ -93,6 +96,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     val packets: StateFlow<List<PacketRecord>> = IrminsulCapture.packets
 
     private var isAutoStopping = false
+    private var reloginAskedThisSession = false
 
     private val targetPackages = listOf(
         "com.miHoYo.GenshinImpact",
@@ -103,14 +107,28 @@ class MainViewModel(private val context: Context) : ViewModel() {
     private var logList = mutableListOf<String>()
 
     private fun captureConfig() = IrminsulCapture.Config(
-        queueCapacity = QUEUE_CAPACITY
+        queueCapacity = QUEUE_CAPACITY,
+        // The library would nudge the game by itself; this host asks first.
+        autoForceRelogin = false
     ) { items, characters, achievements ->
         onDataUpdated(items, characters, achievements)
     }
 
     private fun startCaptureFrom(source: CaptureSource) {
+        reloginAskedThisSession = false
         dataStore.clear()
         IrminsulCapture.start(context, source, dataStore, captureConfig())
+    }
+
+    /** Restarts the game so its login runs in front of the running capture. */
+    fun confirmForceRelogin() {
+        _uiState.value = _uiState.value.copy(showReloginDialog = false)
+        addLog("Restarting the game to catch its login...")
+        IrminsulCapture.forceRelogin(context)
+    }
+
+    fun dismissReloginDialog() {
+        _uiState.value = _uiState.value.copy(showReloginDialog = false)
     }
 
     init {
@@ -125,6 +143,26 @@ class MainViewModel(private val context: Context) : ViewModel() {
                         "Weapons: ${c.weaponsCount}, Materials: ${c.materialsCount}, " +
                         "Characters: ${c.charactersCount}, Achievements: ${c.achievementsCount}"
                 )
+            }
+        }
+
+        // Traffic but nothing decrypting means the capture joined a running
+        // session. Ask once per session whether to nudge the game into a new
+        // login; if the key shows up on its own, drop the question.
+        viewModelScope.launch {
+            combine(IrminsulCapture.sessionPhase, IrminsulCapture.traffic) { phase, traffic ->
+                phase to traffic
+            }.collect { (phase, traffic) ->
+                val blind = phase == SessionPhase.AwaitingLogin && traffic.totalBytes > 0
+                when {
+                    blind && !reloginAskedThisSession -> {
+                        reloginAskedThisSession = true
+                        _uiState.value = _uiState.value.copy(showReloginDialog = true)
+                    }
+                    !blind && phase != SessionPhase.AwaitingLogin && _uiState.value.showReloginDialog -> {
+                        _uiState.value = _uiState.value.copy(showReloginDialog = false)
+                    }
+                }
             }
         }
 

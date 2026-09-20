@@ -16,6 +16,15 @@ sealed interface CaptureError {
 
     /** The packet's cached body is gone — the native cache evicted it. */
     data object PayloadUnavailable : CaptureError
+
+    /** The action needs a running capture session, and there is none. */
+    data object NoActiveSession : CaptureError
+
+    /** None of the captured game packages is installed, so there is nothing to restart. */
+    data object NoGameInstalled : CaptureError
+
+    /** The game was restarted but Android refused to bring it to the foreground. */
+    data object GameRelaunchBlocked : CaptureError
 }
 
 /**

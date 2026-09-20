@@ -34,7 +34,7 @@ configurations.all {
 dependencies {
     // Resolved from mavenLocal, i.e. this app consumes the library exactly like
     // a third-party host would — no project() shortcut.
-    implementation('com.esc.irminsul:capture:1.4.0') { changing = true }
+    implementation('com.esc.irminsul:capture:1.5.0') { changing = true }
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'androidx.activity:activity-ktx:1.9.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.4'

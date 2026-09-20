@@ -1,5 +1,6 @@
 package com.esc.irminsul.capture
 
+import android.app.ActivityManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -25,6 +26,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.launch
 
 /**
@@ -49,6 +53,18 @@ object IrminsulCapture {
 
     private const val TAG = "IrminsulCapture"
 
+    /** How long a session may stay blind before the game is restarted. */
+    private const val BLIND_GRACE_MS = 10_000L
+
+    /**
+     * Distance between restarts. A restart costs the game a full launch — patch
+     * check, login, world load — which is longer than that, so a second attempt
+     * can never interrupt the first one's login.
+     */
+    private const val AUTO_RELOGIN_COOLDOWN_MS = 180_000L
+
+    private const val MAX_AUTO_RELOGIN_ATTEMPTS = 2
+
     private val ring = PacketRingBuffer()
 
     /** Decoded commands, newest last. Read-only: the module is the only writer. */
@@ -65,6 +81,9 @@ object IrminsulCapture {
      */
     val droppedPackets: StateFlow<Long>
         get() = CaptureStatus.droppedPackets
+
+    /** Bytes and connections the capture loop has accounted for. */
+    val traffic: StateFlow<CaptureTraffic> = CaptureStatus.traffic
 
     /** Diagnostic lines forwarded from the native stack. No replay. */
     private val _logs = MutableSharedFlow<String>(extraBufferCapacity = 256)
@@ -88,8 +107,18 @@ object IrminsulCapture {
         /** Post the "all data collected" notification when the native stack reports it. */
         val completionNotification: Boolean = true,
         /**
+         * When the tunnel carries game traffic but nothing decrypts — i.e. the
+         * capture joined a session already in progress — restart the game so its
+         * login runs in front of the tunnel. Default on: the alternative is a
+         * session that can never be parsed. This closes the player's game, so a
+         * host that wants to ask first sets this to false and calls
+         * [IrminsulCapture.forceRelogin] itself.
+         */
+        val autoForceRelogin: Boolean = true,
+        /**
          * Fired once per category, with only the categories that just arrived
          * set to true — a later arrival does not re-report the earlier ones.
+         * Like [DataStatusSink.publish], this runs on the module's decode thread.
          */
         val onDataUpdated: (items: Boolean, characters: Boolean, achievements: Boolean) -> Unit =
             { _, _, _ -> }
@@ -100,6 +129,7 @@ object IrminsulCapture {
     private var config = Config()
     private var activeSource: CaptureSource? = null
     private var replayJob: Job? = null
+    private var autoReloginJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     init {
@@ -133,6 +163,23 @@ object IrminsulCapture {
             }
         })
     }
+
+    /**
+     * Whether this session can decrypt yet. Derived, never stored: no key can
+     * exist until the tunnel sees the handshake's token response, so a session
+     * that starts mid-game sits in [SessionPhase.AwaitingLogin] with traffic
+     * flowing and nothing decoding — the state [forceRelogin] exists to end.
+     */
+    val sessionPhase: StateFlow<SessionPhase> = combine(
+        isCapturing, packets, completion
+    ) { capturing, decoded, done ->
+        when {
+            !capturing -> SessionPhase.Idle
+            done != null -> SessionPhase.Complete
+            decoded.isNotEmpty() -> SessionPhase.Collecting
+            else -> SessionPhase.AwaitingLogin
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, SessionPhase.Idle)
 
     /**
      * Loads the native library and creates the sniffer. Call once at startup;
@@ -218,11 +265,92 @@ object IrminsulCapture {
         startPipeline(sink, config)
         NativeLib.resetSession()
         when (source) {
-            CaptureSource.Vpn -> ContextCompat.startForegroundService(
-                context,
-                Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_START)
-            )
+            CaptureSource.Vpn -> {
+                ContextCompat.startForegroundService(
+                    context,
+                    Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_START)
+                )
+                armAutoRelogin(context)
+            }
             is CaptureSource.File -> replay(source.path)
+        }
+    }
+
+    /**
+     * Manufactures a login, the only way a capture that joined mid-session can
+     * obtain a session key: the game's cached process is stopped and it is
+     * relaunched, so its handshake runs in front of the already-running tunnel.
+     *
+     * Verified against a live client: neither a short tunnel outage nor a
+     * black-holed socket makes the client re-handshake — it resumes with the key
+     * the capture never saw. Only a new process does.
+     *
+     * Android lets an app kill only *cached* processes, so a game in the
+     * foreground is left alone and the session stays blind; the relaunch then
+     * just brings it back, and may itself be blocked if this host is backgrounded.
+     */
+    fun forceRelogin(context: Context): CaptureResult<Unit> {
+        if (!isCapturing.value) {
+            return CaptureResult.Err(CaptureError.NoActiveSession)
+        }
+        val app = context.applicationContext
+        val installed = CaptureService.targetPackages
+            .mapNotNull { pkg -> app.packageManager.getLaunchIntentForPackage(pkg)?.let { pkg to it } }
+        if (installed.isEmpty()) {
+            return CaptureResult.Err(CaptureError.NoGameInstalled)
+        }
+
+        app.getSystemService(ActivityManager::class.java)?.let { am ->
+            installed.forEach { (pkg, _) -> am.killBackgroundProcesses(pkg) }
+        }
+        val (pkg, launch) = installed.first()
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            app.startActivity(launch)
+            _logs.tryEmit("Restarted $pkg to catch its login; expect the opening sequence")
+            CaptureResult.Ok(Unit)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "no launchable activity for $pkg")
+            CaptureResult.Err(CaptureError.NoGameInstalled)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "relaunch blocked for $pkg", e)
+            CaptureResult.Err(CaptureError.GameRelaunchBlocked)
+        }
+    }
+
+    /** Restarts a blind session's game into a login, a bounded number of times. */
+    private fun armAutoRelogin(context: Context) {
+        autoReloginJob?.cancel()
+        if (!config.autoForceRelogin) return
+        val app = context.applicationContext
+        autoReloginJob = scope.launch {
+            var blindSince = 0L
+            var lastAttemptAt = 0L
+            var attempts = 0
+            combine(sessionPhase, traffic) { phase, traffic -> phase to traffic }
+                .collect { (phase, traffic) ->
+                    if (phase != SessionPhase.AwaitingLogin) {
+                        blindSince = 0L
+                        return@collect
+                    }
+                    // No traffic at all means the game is not talking yet; there
+                    // is nothing to interrupt, so wait for it to start.
+                    if (traffic.totalBytes == 0L) return@collect
+                    val now = System.currentTimeMillis()
+                    if (blindSince == 0L) blindSince = now
+                    if (now - blindSince < BLIND_GRACE_MS) return@collect
+                    if (attempts >= MAX_AUTO_RELOGIN_ATTEMPTS) return@collect
+                    if (now - lastAttemptAt < AUTO_RELOGIN_COOLDOWN_MS) return@collect
+
+                    attempts++
+                    lastAttemptAt = now
+                    _logs.tryEmit(
+                        "No session key after ${BLIND_GRACE_MS / 1000}s of traffic — " +
+                            "restarting the game to catch its login " +
+                            "(attempt $attempts/$MAX_AUTO_RELOGIN_ATTEMPTS)"
+                    )
+                    forceRelogin(app)
+                }
         }
     }
 
@@ -241,6 +369,8 @@ object IrminsulCapture {
     private fun endActiveSession(context: Context) {
         replayJob?.cancel()
         replayJob = null
+        autoReloginJob?.cancel()
+        autoReloginJob = null
         if (activeSource is CaptureSource.Vpn || isCapturing.value) {
             context.startService(
                 Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_STOP)
@@ -293,6 +423,7 @@ object IrminsulCapture {
         _completion.value = null
         ring.clear()
         CaptureStatus.resetDroppedPackets()
+        CaptureStatus.resetTraffic()
         val queue = LinkedBlockingQueue<RawPacket>(config.queueCapacity)
         val worker = PacketProcessor(sink, ring, queue, config.onDataUpdated)
         processor = worker

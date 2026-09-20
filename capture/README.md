@@ -12,12 +12,12 @@ decryption and proto parsing, arm64-v8a only).
 ./gradlew :capture:publishToMavenLocal     # or publishReleasePublicationTo<repo>
 ```
 
-Produces `com.esc.irminsul:capture:1.4.0`.
+Produces `com.esc.irminsul:capture:1.5.0`.
 
 ## Integrate
 
 ```kotlin
-dependencies { implementation("com.esc.irminsul:capture:1.4.0") }
+dependencies { implementation("com.esc.irminsul:capture:1.5.0") }
 ```
 
 The public interface is the `com.esc.irminsul.capture` package; everything else
@@ -48,6 +48,33 @@ IrminsulCapture.isCapturing / droppedPackets / logs / completion / permissions
 IrminsulCapture.commandBody(packetId, commandIndex)         // full proto body JSON, on demand
 IrminsulCapture.exportGood(settingsJson) / exportAchievements(format)
 ```
+
+### Catching the login
+
+A key only exists if the handshake passes through the tunnel, so a capture that
+starts after the player is already in-game sees traffic and decrypts nothing.
+The module reports that state rather than hiding it:
+
+```kotlin
+IrminsulCapture.sessionPhase: StateFlow<SessionPhase>  // Idle | AwaitingLogin | Collecting | Complete
+IrminsulCapture.traffic: StateFlow<CaptureTraffic>     // bytes + connections this session
+
+// Close the game and reopen it, so its login runs in front of the capture:
+IrminsulCapture.forceRelogin(applicationContext)
+```
+
+`Config.autoForceRelogin` (default on) calls that after 10s of `AwaitingLogin`
+with traffic flowing, up to twice per session with 3 minutes between attempts.
+A host that wants to ask the player first sets it to `false` and calls
+`forceRelogin` itself — `sessionPhase` + `traffic` are what to show in that
+prompt, and the prompt has to say the game will close and reload.
+
+Why a restart and not something gentler, measured on a live client (2026-09-20):
+black-holing the tunnel for 5s, and a 4s full outage, both leave the client
+*resuming* its session with the key the capture never saw — no new handshake, so
+nothing to decrypt. Only a new process re-logs in. `killBackgroundProcesses`
+reaches a backgrounded game, which is the normal case once capture has started;
+a game in the foreground cannot be closed this way, and the session stays blind.
 
 To replay a saved capture through the same pipeline, start with the other
 source — the module reads the file off the caller's thread:

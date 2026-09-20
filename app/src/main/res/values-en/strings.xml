@@ -168,4 +168,10 @@
     <!-- Auto stop -->
     <string name="auto_stop_title">Auto-stop when data complete</string>
     <string name="auto_stop_subtitle">Stop VPN capture automatically once all data is parsed; packets stay browsable</string>
+
+    <!-- Force re-login -->
+    <string name="relogin_title">Game is online, but no session key was captured</string>
+    <string name="relogin_body">Capture started after the game had already logged in, so the handshake was missed and traffic cannot be decrypted. Restarting the game lets the capture catch its login: the game is closed and reopened, and takes a minute or two to load. If the game is in the foreground, Android won\'t let it be closed and you have to restart it yourself.</string>
+    <string name="relogin_confirm">Restart the game</string>
+    <string name="relogin_dismiss">Not now</string>
 </resources>

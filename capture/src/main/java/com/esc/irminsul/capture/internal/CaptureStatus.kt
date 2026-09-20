@@ -1,6 +1,7 @@
 package com.esc.irminsul.capture.internal
 
 import android.util.Log
+import com.esc.irminsul.capture.CaptureTraffic
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -49,5 +50,23 @@ internal object CaptureStatus {
         if (total % DROP_LOG_INTERVAL == 1L) {
             Log.w(TAG, "Packet queue saturated, $total packets dropped so far")
         }
+    }
+
+    private val _traffic = MutableStateFlow(CaptureTraffic())
+
+    /** Traffic the native loop accounted for; its movement is how we know the game is online. */
+    val traffic: StateFlow<CaptureTraffic> = _traffic.asStateFlow()
+
+    fun resetTraffic() {
+        _traffic.value = CaptureTraffic()
+    }
+
+    /** Called from the capture thread's stats callback, at most once per second. */
+    fun recordTraffic(sent: Long, received: Long, connections: Int) {
+        _traffic.value = CaptureTraffic(
+            sentBytes = sent,
+            receivedBytes = received,
+            connections = connections
+        )
     }
 }

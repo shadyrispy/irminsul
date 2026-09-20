@@ -37,7 +37,12 @@ class CaptureService : VpnService() {
 
         private const val NOTIFICATION_ID_CAPTURE = 1
 
-        private val TARGET_PACKAGES = listOf(
+        /**
+         * The packages the tunnel carries, and therefore the only ones a session
+         * can decrypt. [com.esc.irminsul.capture.IrminsulCapture.forceRelogin]
+         * restarts these to manufacture a login.
+         */
+        internal val targetPackages = listOf(
             "com.miHoYo.GenshinImpact",
             "com.miHoYo.Yuanshen",
             "com.miHoYo.ys.bilibili"
@@ -134,7 +139,7 @@ class CaptureService : VpnService() {
             Log.d(TAG, "No IPv6 connectivity, skipping IPv6 VPN configuration")
         }
 
-        for (pkg in TARGET_PACKAGES) {
+        for (pkg in targetPackages) {
             try {
                 builder.addAllowedApplication(pkg)
                 Log.d(TAG, "Added allowed application: $pkg")
@@ -211,6 +216,7 @@ class CaptureService : VpnService() {
         bytesSent = sent
         bytesReceived = received
         numConnections = connections
+        CaptureStatus.recordTraffic(sent, received, connections)
         mainHandler.post { updateNotification() }
     }
 

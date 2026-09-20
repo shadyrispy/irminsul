@@ -187,6 +187,13 @@ fun MainScreen(
             )
         }
 
+        if (uiState.showReloginDialog) {
+            ForceReloginDialog(
+                onConfirm = { viewModel.confirmForceRelogin() },
+                onDismiss = { viewModel.dismissReloginDialog() }
+            )
+        }
+
         if (uiState.showPermissionDialog) {
             PermissionSetupDialog(
                 permissionState = uiState.permissionState,
@@ -1018,6 +1025,80 @@ fun LaunchGameDialog(
                     ) {
                         Text(
                             text = stringResource(R.string.launch_game),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Shown when the tunnel carries game traffic but nothing decrypts, i.e. the
+ * capture joined a session already in progress. Confirming restarts the game so
+ * its login runs in front of the capture.
+ */
+@Composable
+fun ForceReloginDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.padding(horizontal = 32.dp),
+            colors = CardDefaults.cardColors(containerColor = Surface.copy(alpha = 0.98f)),
+            shape = RoundedCornerShape(20.dp),
+            elevation = CardDefaults.cardElevation(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text(
+                    text = stringResource(R.string.relogin_title),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = stringResource(R.string.relogin_body),
+                    fontSize = 13.sp,
+                    color = TextSecondary,
+                    lineHeight = 19.sp
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(SurfaceLight)
+                            .clickable { onDismiss() }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = stringResource(R.string.relogin_dismiss),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(ButtonPrimary)
+                            .clickable { onConfirm() }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = stringResource(R.string.relogin_confirm),
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color.White
