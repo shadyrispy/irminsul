@@ -47,26 +47,39 @@ auto-stop. So the stall *is* the lever — roughly 50s of silence breaks the
 client — and it needs no extra permission; what it costs is a visible
 "connection lost" and a re-entry, which the player drives.
 
-**Amendment 2 (2026-09-20, late — the stall works; the live sniffer is the bug).**
+**Amendment 2 (2026-09-20, late — the stall works; the live key derivation is what fails).**
 Later trials contradicted the 18:45 success: after 50s/60s/90s kicks, re-entry
 landed the game back in-world while the live session decoded *nothing*. Raw-packet
-dumping (`IrminsulCapture.dumpRawPackets`, written from the live queue) settled
-it: the identical bytes, replayed offline through `pcap-check`, contain the full
-handshake — `[conn] handshake=true`, `GetPlayerTokenReq`, `GetPlayerTokenRsp
-(cmd 6000)` — and decode 4 commands; the live sniffer decoded 0 of the same
-stream. Diagnosis: the client keeps the same UDP tuple across the kick and sends
-retries/keepalives on it before re-entering; the sniffer classifies a flow as
-handshake-or-not **when the flow is first created**, so the later real handshake
-on that stale flow is ignored. Offline replay starts its flow table at the
-handshake and therefore succeeds. Corollary: the one live success (18:45) fits —
-the client sat idle ~3.5min first, its flow aged out, re-entry created a fresh
-one. This is why the pcap's in-world 「转圈」 reconnects are also unparseable
-today: same tuple, same stale-flow miss. Fixing it means letting a keyless flow
-adopt a `GetPlayerTokenRsp` that arrives later (vendored-fork change), not
-timing tricks around the stall — that was tried: recreating the sniffer at the
-title screen (`resetNative` at 20:32:00, re-entry 9s later) still decoded
-nothing live, because the client keeps touching the old tuple until the moment
-it re-logins.
+dumping (`IrminsulCapture.dumpRawPackets`, written from the live queue) settled the
+first question: the client really does re-login — the dump contains
+`GetPlayerTokenReq` + `GetPlayerTokenRsp (cmd 6000)` and offline `pcap-check`
+derives the key from it (4 commands decoded). So the packets arrive; the live
+sniffer is the one that fails.
+
+Routing the sniffer's own `tracing` into logcat then named the failure point:
+
+```
+crypto: Running bruteforce loop.                       ×12
+crypto: Unable to find the encryption key seed.        ×12
+crypto: before decryption data=…                       ×240263
+```
+
+`bruteforce()` searches ±1500ms around `self.sent_time`, which is set from the
+*previous* command header's `sent_ms` — and `ConnectionPacket::HandshakeRequested`
+resets only `sent_kcp`/`recv_kcp`/`key`, not `sent_time`, `client_seed` or
+`possible_seeds`. The leading explanation is therefore stale per-session state: a
+long-lived sniffer centres the window on an anchor from the session it is no
+longer in, misses every time, and a fresh process (which is what every offline
+replay is) succeeds. **Not yet confirmed** — the discriminating test is to prepend
+the previous session's traffic to the same dump and watch offline replay start
+failing. An earlier version of this amendment blamed flow classification; that was
+wrong and is retracted.
+
+What is confirmed is the cost of the instrumentation itself: forwarding the
+sniffer's INFO stream (one multi-kilobyte hex dump per packet) into the JVM
+exhausted the heap, left an `OutOfMemoryError` pending, and the next JNI call
+aborted the process in the decode thread. Fixed by routing WARN+ only, truncating,
+and clearing pending exceptions in `log_to_android`.
 
 ## Decision
 

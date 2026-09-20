@@ -9,6 +9,7 @@ pub mod uiaf;
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::sync::Once;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -120,6 +121,91 @@ fn lock_global_state() -> Option<std::sync::MutexGuard<'static, Option<SnifferSt
 }
 
 // ---------------------------------------------------------------------------
+// Sniffer tracing → logcat
+// ---------------------------------------------------------------------------
+
+/// The vendored sniffer logs through `tracing`, which had no subscriber in this
+/// process — every `warn!`/`error!` about handshakes, dispatch keys and failed
+/// bruteforce vanished, leaving live capture undiagnosable. Route those into the
+/// same channel as the JNI's own logs.
+///
+/// WARN and above only, and truncated: the sniffer's INFO stream is one
+/// multi-kilobyte hex dump per packet, and forwarding it exhausts the Java heap
+/// — an `OutOfMemoryError` left pending, and the next JNI call turned a lost log
+/// into `SIGABRT` in the decode thread.
+static TRACING_INIT: Once = Once::new();
+
+const MAX_SNIFF_LOG_LEN: usize = 300;
+
+fn init_sniffer_tracing() {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::Layer;
+
+    TRACING_INIT.call_once(|| {
+        let layer = LogcatLayer.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
+            meta.target().starts_with("auto_artifactarium") && *meta.level() >= tracing::Level::WARN
+        }));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
+}
+
+struct LogcatLayer;
+
+impl<S: tracing::Subscriber> tracing_subscriber::layer::Layer<S> for LogcatLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let mut visitor = LogcatVisitor::default();
+        event.record(&mut visitor);
+        let mut line = format!("{}: {}", event.metadata().target(), visitor.finish());
+        if line.len() > MAX_SNIFF_LOG_LEN {
+            let mut end = MAX_SNIFF_LOG_LEN;
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            line.truncate(end);
+            line.push('…');
+        }
+        log_to_android("SNIFF", &line);
+    }
+}
+
+#[derive(Default)]
+struct LogcatVisitor {
+    message: String,
+    fields: String,
+}
+
+impl LogcatVisitor {
+    fn finish(&self) -> String {
+        if self.fields.is_empty() {
+            self.message.clone()
+        } else {
+            format!("{}{}", self.message, self.fields)
+        }
+    }
+}
+
+impl tracing::field::Visit for LogcatVisitor {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.record(field, &value);
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.record(field, &format!("{:?}", value));
+    }
+}
+
+impl LogcatVisitor {
+    fn record(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Display) {
+        if field.name() == "message" {
+            self.message = value.to_string();
+        } else {
+            self.fields.push_str(&format!(" {}={}", field.name(), value));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Logging helper
 // ---------------------------------------------------------------------------
 
@@ -130,15 +216,27 @@ fn log_to_android(level: &str, message: &str) {
     };
     if let Some(vm) = guard.as_ref() {
         if let Ok(mut env) = vm.attach_current_thread() {
+            // A pending Java exception — an OOM raised by the log path itself, for
+            // instance — makes the *next* JNI call abort the process. Clear it and
+            // drop the log line; a lost log must never take the capture with it.
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+                return;
+            }
             let msg_str = format!("[{}] {}", level, message);
             if let Ok(msg) = env.new_string(&msg_str) {
                 if let Ok(class) = env.find_class("com/esc/irminsul/capture/internal/NativeLib") {
-                    let _ = env.call_static_method(
-                        class,
-                        "log",
-                        "(Ljava/lang/String;)V",
-                        &[(&msg).into()],
-                    );
+                    if env
+                        .call_static_method(
+                            class,
+                            "log",
+                            "(Ljava/lang/String;)V",
+                            &[(&msg).into()],
+                        )
+                        .is_err()
+                    {
+                        let _ = env.exception_clear();
+                    }
                 }
             }
         }
@@ -274,6 +372,8 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
             return -3;
         }
     };
+
+    init_sniffer_tracing();
 
     let keys = match load_keys() {
         Ok(k) => k,
