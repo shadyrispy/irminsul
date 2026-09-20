@@ -353,6 +353,17 @@ object IrminsulCapture {
         return CaptureResult.Ok(Unit)
     }
 
+    /**
+     * Diagnostic: write every raw packet the tunnel carries to [path] (pcap,
+     * raw-IP link type — readable by `pcap-check`). Null stops an active dump.
+     * Needs a running session; the file grows unbounded, so arm it around the
+     * event being investigated, not for a whole session.
+     */
+    fun dumpRawPackets(path: String?) {
+        val worker = processor ?: return
+        if (path == null) worker.stopDump() else runCatching { worker.startDump(path) }
+    }
+
     /** Restarts a blind session's game into a login, a bounded number of times. */
     private fun armAutoRelogin(context: Context) {
         autoReloginJob?.cancel()

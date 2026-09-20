@@ -5,6 +5,7 @@ import com.esc.irminsul.capture.DataStatus
 import com.esc.irminsul.capture.DataStatusSink
 
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.BlockingQueue
@@ -36,6 +37,48 @@ internal class PacketProcessor(
     @Volatile
     private var running = true
 
+    /** Diagnostic raw-packet sink (pcap file), armed by the facade. */
+    @Volatile
+    private var dump: FileOutputStream? = null
+
+    private val dumpLock = Any()
+
+    /** Writes every captured packet to [path] as a pcap (raw-IP link type). */
+    fun startDump(path: String) {
+        synchronized(dumpLock) {
+            stopDump()
+            val out = FileOutputStream(path)
+            val hdr = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
+            hdr.putInt(0xa1b2c3d4.toInt())   // magic, microseconds
+            hdr.putShort(2).putShort(4)      // version
+            hdr.putInt(0)                    // thiszone
+            hdr.putInt(0)                    // sigfigs
+            hdr.putInt(65535)                // snaplen
+            hdr.putInt(101)                  // LINKTYPE_RAW — tun packets are bare IP
+            out.write(hdr.array())
+            dump = out
+        }
+    }
+
+    fun stopDump() {
+        synchronized(dumpLock) {
+            dump?.let { runCatching { it.flush(); it.close() } }
+            dump = null
+        }
+    }
+
+    private fun dumpPacket(data: ByteArray) {
+        val out = dump ?: return
+        val ts = System.currentTimeMillis()
+        val rec = ByteBuffer.allocate(16 + data.size).order(ByteOrder.LITTLE_ENDIAN)
+        rec.putInt((ts / 1000).toInt())
+        rec.putInt(((ts % 1000) * 1000).toInt())
+        rec.putInt(data.size)
+        rec.putInt(data.size)
+        rec.put(data)
+        synchronized(dumpLock) { runCatching { out.write(rec.array()) } }
+    }
+
     private var notifiedItems = false
     private var notifiedCharacters = false
     private var notifiedAchievements = false
@@ -60,6 +103,7 @@ internal class PacketProcessor(
 
     private fun processPacket(packet: RawPacket) {
         try {
+            dumpPacket(packet.data)
             val statusJson = NativeLib.processPacket(packet.data) ?: return
             val update = StatusDecoder.decode(statusJson, packet.timestampMillis) ?: return
             packetLog.appendAll(update.records)

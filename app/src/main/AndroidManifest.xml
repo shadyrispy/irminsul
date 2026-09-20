@@ -34,6 +34,8 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="com.esc.irminsul.STALL_TUNNEL" />
+                <action android:name="com.esc.irminsul.DUMP" />
+                <action android:name="com.esc.irminsul.DUMP_STOP" />
             </intent-filter>
         </receiver>
     </application>

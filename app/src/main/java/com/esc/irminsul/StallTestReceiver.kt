@@ -3,7 +3,9 @@ package com.esc.irminsul
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.esc.irminsul.capture.IrminsulCapture
+import java.io.File
 
 /**
  * Test hook, driven from adb: black-holes the capture tunnel so the game's
@@ -19,12 +21,24 @@ import com.esc.irminsul.capture.IrminsulCapture
  */
 class StallTestReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION) return
-        val ms = intent.getIntExtra("ms", 0)
-        IrminsulCapture.stallTunnel(ms)
+        when (intent.action) {
+            ACTION -> IrminsulCapture.stallTunnel(intent.getIntExtra("ms", 0))
+            ACTION_DUMP -> {
+                val name = intent.getStringExtra("name") ?: "dump.pcap"
+                // External files dir: readable by `adb pull` on images where
+                // run-as is blocked.
+                val dir = context.getExternalFilesDir(null) ?: context.filesDir
+                val file = File(dir, name)
+                IrminsulCapture.dumpRawPackets(file.absolutePath)
+                Log.i("StallTestReceiver", "raw dump -> ${file.absolutePath}")
+            }
+            ACTION_DUMP_STOP -> IrminsulCapture.dumpRawPackets(null)
+        }
     }
 
     companion object {
         const val ACTION = "com.esc.irminsul.STALL_TUNNEL"
+        const val ACTION_DUMP = "com.esc.irminsul.DUMP"
+        const val ACTION_DUMP_STOP = "com.esc.irminsul.DUMP_STOP"
     }
 }
