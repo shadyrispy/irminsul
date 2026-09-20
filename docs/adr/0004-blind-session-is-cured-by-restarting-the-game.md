@@ -17,31 +17,52 @@ known to be blind:
 - Black-holing the tunnel for 5s — the game's sockets left unserviced, its
   outbound packets read and discarded — twice in a row: traffic resumed, the
   client retransmitted, **no new handshake**. Nothing decoded.
-- A 4s full outage (stop, then start): same. The client *resumes* its session
-  with the key the capture never saw.
 - Restarting the game process (`am kill`, then launch): the client logs in from
   scratch, the running capture catches the handshake, and the session finished
   with all four categories (`Complete`, 1045 artifacts / 94 characters / 217
   weapons / 1845 achievements — the same counts the recorded pcap gives).
 
-A longer outage might also work: the player's own recordings show a
-background-to-foreground stint sometimes resuming and sometimes reloading. That
-is not a mechanism, and the reload case costs the player more than a restart.
+An earlier draft of this ADR also claimed "a 4s full outage does not work". That
+test was invalid and is retracted: the tunnel uses `addAllowedApplication`, so
+when it is down the game simply uses the underlying network — stopping the
+capture is not an outage at all.
+
+The player's own recording (`reconnect.pcap`, 646.8s, 4 handshakes) gives the
+client's real stall tolerance, and it has no clean threshold:
+
+| silence before the event | re-logged in? |
+|---|---|
+| 91.7s | yes, 11s after traffic returned |
+| 86.0s spread over 13 stalls (longest 15.8s) | yes |
+| 25.4s | yes, 11s after |
+| **33.2s** | **no — resumed with the old key** |
+
+25s re-logs in and 33s does not, so the deciding factor is whether the *server*
+has dropped the session, not how long we stall. A stall long enough to be
+reliable (~60-90s) is a worse experience than the restart it would replace.
 
 ## Decision
 
-`forceRelogin` manufactures a login by closing and reopening the game:
-`killBackgroundProcesses` for each installed target package, then its launch
-intent. `Config.autoForceRelogin` (default on) does this 10s after a session
-goes blind, at most twice with 3 minutes between attempts — longer than a cold
-launch, so a second attempt can never interrupt the first one's login. A host
-that wants to warn the player sets it to `false` and asks first; `:app` does
-that, because the restart closes the player's game.
+Ship the **detection**, not the action.
 
-`SessionPhase` and `CaptureTraffic` were added to make the state nameable at all
-— `AwaitingLogin` plus moving bytes *is* the blind session, and it is derived
-from flows the module already had rather than a new flag someone must remember to
-clear.
+`SessionPhase` and `CaptureTraffic` make the blind state nameable —
+`AwaitingLogin` plus moving bytes *is* it — and they are derived from flows the
+module already had rather than a new flag someone must remember to clear. That
+is what the library guarantees to every host.
+
+`forceRelogin` keeps the working mechanism (close the game with
+`killBackgroundProcesses`, then start its launch intent) as an explicitly
+opt-in call:
+
+- `Config.autoForceRelogin` is **off by default**. A capture library that
+  silently closes the player's game is not a library anyone should depend on,
+  and the case it fixes is rare enough to be the host's product decision.
+- The library does **not** declare `KILL_BACKGROUND_PROCESSES`. Merging the AAR
+  would otherwise hand every host a permission whose only purpose is stopping
+  other apps' processes. A host that opts in declares it itself; without it
+  `forceRelogin` degrades to a foreground bring-up and says so on `logs`.
+- `:app` does not call it. Its dialog tells the player to restart the game and
+  leaves the choice with them.
 
 The tunnel-pause implementation is deleted rather than kept as a tunable:
 `pause_until_ms`, `capture_set_pause` and `nativePauseTunnel` went, so the
@@ -49,13 +70,13 @@ symbol gate reports 11 exports instead of 12.
 
 ## Consequences
 
-- The library now asks for `KILL_BACKGROUND_PROCESSES`, and merging the AAR
-  gives that to every host. It cannot touch a foreground process, so a host that
-  keeps the game in the foreground (a floating-window flow) stays blind and has
-  to restart the game itself — the interface says so rather than pretending the
-  call succeeded.
-- "Restart the game" is a heavier user-visible action than a reconnect, so the
-  confirmation copy has to say the game will close and reload.
+- A blind session is now *visible* everywhere and *repairable* nowhere by
+  default. That is the intended trade: the host either asks the player or opts
+  into the restart with its own permission declaration.
+- `killBackgroundProcesses` cannot touch a foreground process, so a host that
+  keeps the game in the foreground (a floating-window flow) stays blind even
+  with the action enabled — the player has to restart it.
 - The sniffer keeps its key across `stop`/`start` inside one process, so a
   second session in the same process can still decrypt an ongoing game session.
-  Persisting that key across app restarts is deliberately still open.
+  Persisting that key across app restarts is deliberately still open, and is
+  the better answer for the cases a restart cannot reach.

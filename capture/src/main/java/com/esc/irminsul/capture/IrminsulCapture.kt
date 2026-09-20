@@ -108,13 +108,14 @@ object IrminsulCapture {
         val completionNotification: Boolean = true,
         /**
          * When the tunnel carries game traffic but nothing decrypts — i.e. the
-         * capture joined a session already in progress — restart the game so its
-         * login runs in front of the tunnel. Default on: the alternative is a
-         * session that can never be parsed. This closes the player's game, so a
-         * host that wants to ask first sets this to false and calls
-         * [IrminsulCapture.forceRelogin] itself.
+         * capture joined a session already in progress — call [forceRelogin] to
+         * restart the game and catch its login. Off by default: the only thing
+         * that reliably produces a new handshake closes the player's game, and a
+         * capture library should not do that to a host without being asked. A
+         * host that wants it turns this on, or asks the player first and calls
+         * [forceRelogin] itself.
          */
-        val autoForceRelogin: Boolean = true,
+        val autoForceRelogin: Boolean = false,
         /**
          * Fired once per category, with only the categories that just arrived
          * set to true — a later arrival does not re-report the earlier ones.
@@ -277,17 +278,23 @@ object IrminsulCapture {
     }
 
     /**
-     * Manufactures a login, the only way a capture that joined mid-session can
-     * obtain a session key: the game's cached process is stopped and it is
-     * relaunched, so its handshake runs in front of the already-running tunnel.
+     * Manufactures a login, the only thing that can save a capture that joined
+     * mid-session: the game's cached process is stopped and it is relaunched, so
+     * its handshake runs in front of the already-running tunnel.
      *
-     * Verified against a live client: neither a short tunnel outage nor a
-     * black-holed socket makes the client re-handshake — it resumes with the key
-     * the capture never saw. Only a new process does.
+     * Verified against a live client: neither a black-holed tunnel nor a short
+     * outage does this — the client *resumes* with the key the capture never saw,
+     * and no stall length is reliable (25s of silence re-logged in, 33s did not).
+     * Only a new process re-logs in. See `docs/adr/0004`.
      *
-     * Android lets an app kill only *cached* processes, so a game in the
-     * foreground is left alone and the session stays blind; the relaunch then
-     * just brings it back, and may itself be blocked if this host is backgrounded.
+     * This closes the player's game, so nothing here does it automatically:
+     * [Config.autoForceRelogin] is off by default and a host calls this only
+     * after asking. Closing also needs `KILL_BACKGROUND_PROCESSES`, which the
+     * library deliberately does not declare for its hosts — a host that wants
+     * the full restart adds it to its own manifest (normal protection level,
+     * granted at install). Without it the game is only brought to the
+     * foreground, which does not produce a new login. Android cannot stop a
+     * foreground process at all, so a game the player is looking at stays blind.
      */
     fun forceRelogin(context: Context): CaptureResult<Unit> {
         if (!isCapturing.value) {
@@ -300,8 +307,12 @@ object IrminsulCapture {
             return CaptureResult.Err(CaptureError.NoGameInstalled)
         }
 
-        app.getSystemService(ActivityManager::class.java)?.let { am ->
-            installed.forEach { (pkg, _) -> am.killBackgroundProcesses(pkg) }
+        try {
+            app.getSystemService(ActivityManager::class.java)
+                ?.let { am -> installed.forEach { (pkg, _) -> am.killBackgroundProcesses(pkg) } }
+        } catch (e: SecurityException) {
+            Log.i(TAG, "cannot close the game: declare KILL_BACKGROUND_PROCESSES")
+            _logs.tryEmit("Cannot close the game — add KILL_BACKGROUND_PROCESSES to the host manifest")
         }
         val (pkg, launch) = installed.first()
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

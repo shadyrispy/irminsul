@@ -27,10 +27,12 @@ not playing.
 The only cure for a blind session, because the key comes from a handshake that
 already happened: `forceRelogin` closes the game and reopens it so its login
 runs inside the tunnel. Measured on a live client, neither a black-holed tunnel
-nor a short outage does this — the client *resumes* with the old key. It reaches
-a backgrounded game only (`killBackgroundProcesses` cannot touch a foreground
-process), so a host that shows the game may have to restart it by hand.
-`Config.autoForceRelogin` makes the module do it on its own.
+nor any reliable stall length does this — the client *resumes* with the old key.
+It reaches a backgrounded game only (`killBackgroundProcesses` cannot touch a
+foreground process), and it needs a permission the library deliberately does not
+declare for its hosts. So this is opt-in everywhere: `Config.autoForceRelogin`
+is off by default, and the hosts tell the player to restart the game instead of
+doing it to them. See `docs/adr/0004`.
 
 ## Decoded command
 

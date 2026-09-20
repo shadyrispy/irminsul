@@ -63,18 +63,22 @@ IrminsulCapture.traffic: StateFlow<CaptureTraffic>     // bytes + connections th
 IrminsulCapture.forceRelogin(applicationContext)
 ```
 
-`Config.autoForceRelogin` (default on) calls that after 10s of `AwaitingLogin`
-with traffic flowing, up to twice per session with 3 minutes between attempts.
-A host that wants to ask the player first sets it to `false` and calls
-`forceRelogin` itself — `sessionPhase` + `traffic` are what to show in that
-prompt, and the prompt has to say the game will close and reload.
+Nothing closes the game unless a host asks it to. `Config.autoForceRelogin` is
+**off by default**, and `forceRelogin` also needs `KILL_BACKGROUND_PROCESSES`
+(normal protection level, granted at install), which this library deliberately
+does not declare on its hosts' behalf — a host that opts in adds it to its own
+manifest. Without it the game is only brought to the foreground, which produces
+no new login. What the module does guarantee is that the blind state is
+nameable: `sessionPhase == AwaitingLogin` while `traffic` moves.
 
 Why a restart and not something gentler, measured on a live client (2026-09-20):
-black-holing the tunnel for 5s, and a 4s full outage, both leave the client
-*resuming* its session with the key the capture never saw — no new handshake, so
-nothing to decrypt. Only a new process re-logs in. `killBackgroundProcesses`
-reaches a backgrounded game, which is the normal case once capture has started;
-a game in the foreground cannot be closed this way, and the session stays blind.
+black-holing the tunnel for 5s leaves the client *resuming* its session with the
+key the capture never saw, and the player's own recording shows no stall length
+that reliably forces a re-login — 25s of silence did, 33s did not, because it
+turns on whether the server has dropped the session. Only a new process re-logs
+in. `killBackgroundProcesses` reaches a backgrounded game, which is the normal
+case once capture has started; a game in the foreground cannot be closed this
+way, and the session stays blind. See `docs/adr/0004`.
 
 To replay a saved capture through the same pipeline, start with the other
 source — the module reads the file off the caller's thread:

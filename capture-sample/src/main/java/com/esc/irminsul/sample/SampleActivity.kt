@@ -38,7 +38,6 @@ class SampleActivity : ComponentActivity() {
     private lateinit var statusView: TextView
     private lateinit var logView: TextView
     private lateinit var toggleButton: Button
-    private lateinit var reloginButton: Button
 
     /** Receives collection progress from the library, on the library's decode thread. */
     private val statusSink = object : DataStatusSink {
@@ -118,13 +117,8 @@ class SampleActivity : ComponentActivity() {
                 if (IrminsulCapture.isCapturing.value) stopCapture() else requestThenStart()
             }
         }
-        reloginButton = Button(this@SampleActivity).apply {
-            text = "Force re-login"
-            setOnClickListener { forceRelogin() }
-        }
         logView = TextView(this@SampleActivity)
         addView(toggleButton)
-        addView(reloginButton)
         addView(statusView)
         addView(ScrollView(this@SampleActivity).apply {
             addView(logView)
@@ -140,9 +134,9 @@ class SampleActivity : ComponentActivity() {
 
     private fun startCapture() {
         // A host that shows its own UI does not want the library's notification.
-        // autoForceRelogin stays at its default: when the tunnel carries game
-        // traffic that nothing decrypts, the library restarts the game so its
-        // login — and with it the session key — runs in front of the capture.
+        // A session that joins a game already logged in stays blind
+        // (SessionPhase.AwaitingLogin with traffic moving); this host surfaces
+        // that state and leaves the cure — a fresh login — to the player.
         lastStatus = null   // a new session has collected nothing, whatever the last one did
         IrminsulCapture.start(
             applicationContext,
@@ -156,14 +150,6 @@ class SampleActivity : ComponentActivity() {
     private fun stopCapture() {
         IrminsulCapture.stop(applicationContext)
         append("capture stopped")
-    }
-
-    /** Manual version of what [IrminsulCapture.Config.autoForceRelogin] does. */
-    private fun forceRelogin() {
-        when (IrminsulCapture.forceRelogin(applicationContext)) {
-            is CaptureResult.Ok -> append("restarting the game to catch its login")
-            is CaptureResult.Err -> append("force re-login refused")
-        }
     }
 
     private fun render() {

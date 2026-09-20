@@ -107,9 +107,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     private var logList = mutableListOf<String>()
 
     private fun captureConfig() = IrminsulCapture.Config(
-        queueCapacity = QUEUE_CAPACITY,
-        // The library would nudge the game by itself; this host asks first.
-        autoForceRelogin = false
+        queueCapacity = QUEUE_CAPACITY
     ) { items, characters, achievements ->
         onDataUpdated(items, characters, achievements)
     }
@@ -118,13 +116,6 @@ class MainViewModel(private val context: Context) : ViewModel() {
         reloginAskedThisSession = false
         dataStore.clear()
         IrminsulCapture.start(context, source, dataStore, captureConfig())
-    }
-
-    /** Restarts the game so its login runs in front of the running capture. */
-    fun confirmForceRelogin() {
-        _uiState.value = _uiState.value.copy(showReloginDialog = false)
-        addLog("Restarting the game to catch its login...")
-        IrminsulCapture.forceRelogin(context)
     }
 
     fun dismissReloginDialog() {

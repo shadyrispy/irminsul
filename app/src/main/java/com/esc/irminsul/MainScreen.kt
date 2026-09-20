@@ -188,8 +188,7 @@ fun MainScreen(
         }
 
         if (uiState.showReloginDialog) {
-            ForceReloginDialog(
-                onConfirm = { viewModel.confirmForceRelogin() },
+            AwaitingLoginDialog(
                 onDismiss = { viewModel.dismissReloginDialog() }
             )
         }
@@ -1038,14 +1037,11 @@ fun LaunchGameDialog(
 
 /**
  * Shown when the tunnel carries game traffic but nothing decrypts, i.e. the
- * capture joined a session already in progress. Confirming restarts the game so
- * its login runs in front of the capture.
+ * capture joined a session already in progress. Nothing here closes the game:
+ * only a fresh login helps, and that is the player's call to make.
  */
 @Composable
-fun ForceReloginDialog(
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
-) {
+fun AwaitingLoginDialog(onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier.padding(horizontal = 32.dp),
@@ -1068,42 +1064,21 @@ fun ForceReloginDialog(
                     lineHeight = 19.sp
                 )
                 Spacer(modifier = Modifier.height(20.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(ButtonPrimary)
+                        .clickable { onDismiss() }
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(SurfaceLight)
-                            .clickable { onDismiss() }
-                            .padding(vertical = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = stringResource(R.string.relogin_dismiss),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = TextPrimary
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(ButtonPrimary)
-                            .clickable { onConfirm() }
-                            .padding(vertical = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = stringResource(R.string.relogin_confirm),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White
-                        )
-                    }
+                    Text(
+                        text = stringResource(R.string.relogin_confirm),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
                 }
             }
         }
