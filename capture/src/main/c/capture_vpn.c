@@ -49,6 +49,23 @@ static void log_error(const char *fmt, ...) {
     va_end(args);
 }
 
+uint64_t capture_monotonic_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC_COARSE, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+/*
+ * Black-hole the tunnel for a moment in both directions. The tunnel only
+ * carries the game's UID (addAllowedApplication), so this is precisely "the
+ * game loses its connection" — the lever for making the client re-handshake.
+ */
+void capture_set_pause(capture_ctx_t *ctx, uint32_t pause_ms) {
+    if (!ctx) return;
+    ctx->pause_until_ms = capture_monotonic_ms() + pause_ms;
+    log_info("Tunnel black-holed for %u ms", pause_ms);
+}
+
 static void init_known_dns_ips() {
     known_dns_ips_count = 0;
     for (int i = 0; KNOWN_DNS_IPS[i] != NULL && known_dns_ips_count < 16; i++) {
@@ -405,24 +422,31 @@ int run_vpn_loop(capture_ctx_t *ctx) {
     log_info("VPN capture loop started, tunfd=%d", ctx->tunfd);
 
     while (ctx->running) {
+        int paused = ctx->pause_until_ms > capture_monotonic_ms();
+
         FD_ZERO(&rd_fds);
         FD_ZERO(&wr_fds);
 
         FD_SET(ctx->tunfd, &rd_fds);
         max_fd = ctx->tunfd;
 
-        int zdtun_max_fd;
-        fd_set zdtun_rd, zdtun_wr;
-        zdtun_fds(ctx->zdt, &zdtun_max_fd, &zdtun_rd, &zdtun_wr);
+        // While paused the game's sockets are deliberately left unserviced and
+        // outbound packets are read and discarded, so nothing reaches either
+        // side of the connection.
+        if (!paused) {
+            int zdtun_max_fd;
+            fd_set zdtun_rd, zdtun_wr;
+            zdtun_fds(ctx->zdt, &zdtun_max_fd, &zdtun_rd, &zdtun_wr);
 
-        for (int fd = 0; fd <= zdtun_max_fd; fd++) {
-            if (FD_ISSET(fd, &zdtun_rd)) {
-                FD_SET(fd, &rd_fds);
-                if (fd > max_fd) max_fd = fd;
-            }
-            if (FD_ISSET(fd, &zdtun_wr)) {
-                FD_SET(fd, &wr_fds);
-                if (fd > max_fd) max_fd = fd;
+            for (int fd = 0; fd <= zdtun_max_fd; fd++) {
+                if (FD_ISSET(fd, &zdtun_rd)) {
+                    FD_SET(fd, &rd_fds);
+                    if (fd > max_fd) max_fd = fd;
+                }
+                if (FD_ISSET(fd, &zdtun_wr)) {
+                    FD_SET(fd, &wr_fds);
+                    if (fd > max_fd) max_fd = fd;
+                }
             }
         }
 
@@ -443,6 +467,8 @@ int run_vpn_loop(capture_ctx_t *ctx) {
 
         if (FD_ISSET(ctx->tunfd, &rd_fds)) {
             ssize_t pkt_len = read(ctx->tunfd, pkt_buf, sizeof(pkt_buf));
+            if (pkt_len > 0 && paused)
+                goto housekeeping;   // black-holed: the client retransmits, then gives up
             if (pkt_len > 0) {
                 zdtun_pkt_t pkt;
 

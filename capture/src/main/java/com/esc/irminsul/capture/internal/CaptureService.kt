@@ -26,6 +26,10 @@ class CaptureService : VpnService() {
         private const val TAG = "CaptureService"
         const val ACTION_START = "com.esc.irminsul.START_CAPTURE"
         const val ACTION_STOP = "com.esc.irminsul.STOP_CAPTURE"
+        const val ACTION_STALL_TUNNEL = "com.esc.irminsul.STALL_TUNNEL"
+
+        /** How long the tunnel stays black-holed; carried by [EXTRA_STALL_MS]. */
+        const val EXTRA_STALL_MS = "com.esc.irminsul.STALL_MS"
 
         private const val VPN_MTU = 1500
         private const val VPN_IP4_ADDRESS = "10.215.173.1"
@@ -86,6 +90,7 @@ class CaptureService : VpnService() {
     private external fun nativeRunPacketLoop(tunfd: Int)
     private external fun nativeStopCapture()
     private external fun nativeSetDnsServer(dnsIp: String, dnsPort: Int, ipver: Int)
+    private external fun nativePauseTunnel(pauseMs: Int): Int
 
     override fun onCreate() {
         super.onCreate()
@@ -97,8 +102,20 @@ class CaptureService : VpnService() {
         when (intent?.action) {
             ACTION_START -> startCapture()
             ACTION_STOP -> stopCapture()
+            ACTION_STALL_TUNNEL -> stallTunnel(intent.getIntExtra(EXTRA_STALL_MS, 0))
         }
         return START_STICKY
+    }
+
+    /**
+     * Black-holes the tunnel so the game's connection dies in front of the
+     * capture. Duration is the caller's experiment dial.
+     */
+    private fun stallTunnel(durationMs: Int) {
+        if (!CaptureStatus.isCapturing.value || durationMs <= 0) return
+        val code = nativePauseTunnel(durationMs)
+        Log.i(TAG, if (code == 0) "Stalling tunnel ${durationMs}ms to force a re-login"
+            else "stallTunnel: native refused (code=$code)")
     }
 
     private fun startCapture() {

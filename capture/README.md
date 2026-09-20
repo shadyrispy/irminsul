@@ -71,14 +71,14 @@ manifest. Without it the game is only brought to the foreground, which produces
 no new login. What the module does guarantee is that the blind state is
 nameable: `sessionPhase == AwaitingLogin` while `traffic` moves.
 
-Why a restart and not something gentler, measured on a live client (2026-09-20):
-black-holing the tunnel for 5s leaves the client *resuming* its session with the
-key the capture never saw, and the player's own recording shows no stall length
-that reliably forces a re-login — 25s of silence did, 33s did not, because it
-turns on whether the server has dropped the session. Only a new process re-logs
-in. `killBackgroundProcesses` reaches a backgrounded game, which is the normal
-case once capture has started; a game in the foreground cannot be closed this
-way, and the session stays blind. See `docs/adr/0004`.
+Why a stall and how long, measured on a live client (2026-09-20, BlueStacks,
+CN 7.0.0): the client has a hard heartbeat timeout. With the tunnel genuinely
+black-holed — packets dropped in both directions — up to 45s of silence is
+silently resumed with the old key; 50s and 60s end in 「连接已断开 · 连接超时」,
+and the client sits on the title screen until the player re-enters, at which
+point the still-running capture catches the fresh login and completes. So the
+dial is roughly 60s, and the lever needs no extra permission — see
+`docs/adr/0004` for the ladder.
 
 To replay a saved capture through the same pipeline, start with the other
 source — the module reads the file off the caller's thread:

@@ -26,6 +26,10 @@ typedef struct {
     uint64_t bytes_received;
     uint32_t num_connections;
     uint64_t last_stats_time;
+    /* Monotonic ms until which the tunnel black-holes everything. The VPN only
+     * carries the game's UID, so pausing is precisely "the game loses its
+     * connection" — the lever for making the client re-handshake. */
+    volatile uint64_t pause_until_ms;
 } capture_ctx_t;
 
 capture_ctx_t *capture_ctx_create(JavaVM *java_vm, jobject capture_service, jint sdk_ver);
@@ -33,5 +37,7 @@ void capture_ctx_destroy(capture_ctx_t *ctx);
 int run_vpn_loop(capture_ctx_t *ctx);
 int cache_jni_methods(capture_ctx_t *ctx);
 void capture_set_dns_server(capture_ctx_t *ctx, const char *dns_ip, uint16_t dns_port, uint8_t ipver);
+void capture_set_pause(capture_ctx_t *ctx, uint32_t pause_ms);
+uint64_t capture_monotonic_ms(void);
 
 #endif

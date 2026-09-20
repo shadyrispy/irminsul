@@ -25,21 +25,27 @@ known to be blind:
 An earlier draft of this ADR also claimed "a 4s full outage does not work". That
 test was invalid and is retracted: the tunnel uses `addAllowedApplication`, so
 when it is down the game simply uses the underlying network — stopping the
-capture is not an outage at all.
+capture is not an outage at all. The pcap numbers below were about
+background-to-foreground freezes, not a controlled stall; they do not bound what
+a stall can do.
 
-The player's own recording (`reconnect.pcap`, 646.8s, 4 handshakes) gives the
-client's real stall tolerance, and it has no clean threshold:
+**Amendment (2026-09-20, evening — controlled black-hole ladder on BlueStacks).**
+With the tunnel genuinely black-holed for a fixed time (packets dropped in both
+directions), the client has a hard heartbeat timeout and the threshold is clean:
 
-| silence before the event | re-logged in? |
+| stall | outcome |
 |---|---|
-| 91.7s | yes, 11s after traffic returned |
-| 86.0s spread over 13 stalls (longest 15.8s) | yes |
-| 25.4s | yes, 11s after |
-| **33.2s** | **no — resumed with the old key** |
+| 5 / 10 / 15 / 20 / 30 / 45s | client silently *resumes* with the old key |
+| 50s | 「连接已断开 · 连接超时」 — session given up |
+| 60s | same dialog |
+| 90s | 「网络错误 4201」, kicked to the title screen |
 
-25s re-logs in and 33s does not, so the deciding factor is whether the *server*
-has dropped the session, not how long we stall. A stall long enough to be
-reliable (~60-90s) is a worse experience than the restart it would replace.
+After the kick, tapping 确认 → 返回标题 → 点击进入 runs a fresh login, and the
+still-running capture caught it end to end: `All data collected! Artifacts: 1045,
+Weapons: 217, Materials: 1230, Characters: 94, Achievements: 1845`, then
+auto-stop. So the stall *is* the lever — roughly 50s of silence breaks the
+client — and it needs no extra permission; what it costs is a visible
+"connection lost" and a re-entry, which the player drives.
 
 ## Decision
 

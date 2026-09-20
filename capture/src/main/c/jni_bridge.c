@@ -106,6 +106,19 @@ Java_com_esc_irminsul_capture_internal_CaptureService_nativeStopCapture(
     }
 }
 
+/*
+ * Black-hole the tunnel for a while so the game's connection dies and it
+ * re-handshakes in front of the capture. Returns 0 when a capture loop is
+ * running to be stalled, -1 when there is none.
+ */
+JNIEXPORT jint JNICALL
+Java_com_esc_irminsul_capture_internal_CaptureService_nativePauseTunnel(
+        JNIEnv *env, jobject thiz, jint pause_ms) {
+    if (!g_ctx || g_thread_finished || pause_ms <= 0) return -1;
+    capture_set_pause(g_ctx, (uint32_t) pause_ms);
+    return 0;
+}
+
 JNIEXPORT void JNICALL
 Java_com_esc_irminsul_capture_internal_CaptureService_nativeSetDnsServer(
         JNIEnv *env, jobject thiz, jstring dns_ip, jint dns_port, jint ipver) {

@@ -329,6 +329,30 @@ object IrminsulCapture {
         }
     }
 
+    /**
+     * Black-holes the tunnel for [durationMs] — the game's packets are dropped
+     * in both directions — so its connection dies and, if the stall outlasts
+     * the client's tolerance, it re-handshakes in front of the capture. The
+     * client may instead *resume* the session with the key the capture never
+     * saw, which is why the duration that actually works is a measurement, not
+     * a constant: this call is the dial for that measurement. Capped at 10
+     * minutes; needs a running session.
+     */
+    fun stallTunnel(durationMs: Int): CaptureResult<Unit> {
+        if (!isCapturing.value) {
+            return CaptureResult.Err(CaptureError.NoActiveSession)
+        }
+        val ms = durationMs.coerceIn(1, 600_000)
+        val app = appContext ?: return CaptureResult.Err(CaptureError.NoActiveSession)
+        _logs.tryEmit("Stalling the tunnel ${ms}ms — expect the game to stall and reconnect")
+        app.startService(
+            Intent(app, CaptureService::class.java)
+                .setAction(CaptureService.ACTION_STALL_TUNNEL)
+                .putExtra(CaptureService.EXTRA_STALL_MS, ms)
+        )
+        return CaptureResult.Ok(Unit)
+    }
+
     /** Restarts a blind session's game into a login, a bounded number of times. */
     private fun armAutoRelogin(context: Context) {
         autoReloginJob?.cancel()
