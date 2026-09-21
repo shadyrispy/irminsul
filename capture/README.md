@@ -45,15 +45,21 @@ IrminsulCapture.close()
 
 IrminsulCapture.packets: StateFlow<List<PacketRecord>>      // ring buffer, newest last, read-only
 IrminsulCapture.isCapturing / droppedPackets / logs / completion / permissions
+IrminsulCapture.keyOrigin: StateFlow<KeyOrigin?>              // which key decrypts, and how
 IrminsulCapture.commandBody(packetId, commandIndex)         // full proto body JSON, on demand
 IrminsulCapture.exportGood(settingsJson) / exportAchievements(format)
+IrminsulCapture.exportKnownBodies(destDir)                   // the samples, where a shell can read them
 ```
 
 ### Catching the login
 
 A key only exists if the handshake passes through the tunnel, so a capture that
 starts after the player is already in-game sees traffic and decrypts nothing.
-The module reports that state rather than hiding it:
+The module reports that state rather than hiding it. Which key is decrypting is
+session state, read after every packet (`KeyOrigin`: `Dispatch` = handshake-era
+packets only, `KnownBody` = opened from a saved sample, `TimeSearch` = derived
+from this handshake), because the frames where a key dies are exactly the frames
+that carry no payload to say so:
 
 ```kotlin
 IrminsulCapture.sessionPhase: StateFlow<SessionPhase>  // Idle | AwaitingLogin | Collecting | Complete
@@ -62,6 +68,10 @@ IrminsulCapture.traffic: StateFlow<CaptureTraffic>     // bytes + connections th
 // Close the game and reopen it, so its login runs in front of the capture:
 IrminsulCapture.forceRelogin(applicationContext)
 ```
+
+`SessionPhase` is derived from `keyOrigin`, not from a packet count: the dispatch
+key alone decodes the handshake's own packets, so a blind session would otherwise
+read as `Collecting` (see `docs/adr/0004`, amendment 4).
 
 Nothing closes the game unless a host asks it to. `Config.autoForceRelogin` is
 **off by default**, and `forceRelogin` also needs `KILL_BACKGROUND_PROCESSES`
@@ -97,7 +107,11 @@ IrminsulCapture.initNative(context)   // takes context.filesDir for the samples
 ```
 
 So a player who merely lets the game reconnect — or re-enters from the title
-screen — is enough; nothing has to be killed. A capture on a fresh game version,
+screen — is enough; nothing has to be killed. `exportKnownBodies(destDir)` copies
+those samples out of the app's private dir, which on API 30+ images is the only
+way to get them onto a machine that refuses `run-as` (the debug build's
+`EXPORT_SAMPLES` adb hook points it at the public Downloads dir, since
+`adb pull` cannot read `Android/data` either). A capture on a fresh game version,
 before any session has been opened once, still has no sample to work from and
 stays in `AwaitingLogin`.
 

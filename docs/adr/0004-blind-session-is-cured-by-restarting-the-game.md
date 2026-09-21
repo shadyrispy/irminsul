@@ -161,6 +161,73 @@ which is the case the attack covers, so the player tapping through 「连接已�
 enough. Killing the process was only ever needed because re-auth traffic was
 unreadable.
 
+**Amendment 4 (2026-09-21 — the phase was still lying, because the dispatch key
+decodes too).**
+
+`SessionPhase` derived `Collecting` from "the packet list is non-empty". Measured
+offline on the reference captures, a session that never gets a session key still
+produces commands: the dispatch key opens the handshake-era packets, and the
+`full.pcap` fixture's first 4 commands are exactly that. So a blind session read
+as `Collecting`, the relogin dialog never fired, and `Couldn't deduce the session
+key` scrolled past in logcat where nobody was looking.
+
+The phase is now derived from **which key is decrypting**, reported by the sniffer
+as `KeyOrigin` (`dispatch` / `known_body` / `time_search`, plus `None` for "no
+key"):
+
+```
+13:11:58  Decrypting with the dispatch key only: waiting for a login
+13:12:10  [SNIFF] recovered session key from a known command body
+13:12:10  Session opened from a command body saved by an earlier run
+```
+
+That is the live BlueStacks sequence after a 25s stall: dispatch-only, then the
+sample file opening the re-auth, then items/avatars/achievements arriving.
+
+It is session **state**, queried after each packet (`nativeKeyOrigin`), not a field
+of the per-packet payload: a frame that decodes nothing produces no payload, and
+"goes blind at re-login" is precisely such a frame. Putting it in the payload would
+have reported the previous session's key forever after.
+
+**Amendment 5 (2026-09-21, evening — the desktop got live capture, and it has no
+lever to pull).** `irminsul-viewer` now reads three sources — `--file <pcap>`,
+`--file -`, `--live [iface] [--bpf <expr>]` — and the blind session travels with
+them. Its counterpart to this module's re-login prompt is a *notice*, not an action:
+a source with payloads and no commands and no session key says so once, and points at
+`--samples <dir>` (the file the device exports through `EXPORT_SAMPLES`) or at
+capturing from the login.
+
+The first version of `--live` ran `tcpdump -U -n -s0 -w -` as a subprocess and read
+its pcap stream, on the strength of two reasons, both of which turned out to be wrong:
+that a subprocess avoids needing root (it does not — libpcap opens the same
+`/dev/bpf`), and that the game's ports are the sniffer's private business so naming
+them again would create a second list (the reference desktop app declares its own
+`capture::PORT_RANGE`, which is the second list this was meant to avoid). The
+subprocess also left one fact unverifiable without root — whether `tcpdump` writes the
+pcap header before its first packet — and required killing a child process to stop a
+read that was waiting on traffic that had stopped coming.
+
+So `--live` reads through **libpcap**, the way the reference app does: an optional
+cargo dependency behind a default-on `live` feature, `immediate_mode` and a read
+timeout, one thread per interface, and its own `DLT_*` framing. A timeout is what
+makes `stop` prompt on a quiet interface — each expiry is a chance to notice nobody is
+reading any more — so nothing has to be killed. `--file -` stays, because the reason
+to want a pipe is unrelated: it lets the capture run under one user and the browser
+under another (`sudo tcpdump … | irminsul-viewer --file -`), and it is how a phone's
+stream would arrive.
+
+There is deliberately no desktop stall. The stall worked because the tunnel is ours:
+`capture_set_pause` black-holes a queue we own, which is a thing a VPN service can do
+and a BPF reader cannot — the kernel's feed is supplied to us, and the only levers on
+it are the filter we ask for and whether we are reading. So `--live` gets a `stop`
+that really stops, and nothing more invasive.
+
+One sentence in Amendment 4 needs correcting against the shipped code: the debug hook
+that moved to the debug source set is `:app`'s `DebugTestReceiver`, but the
+`ACTION_STALL_TUNNEL` branch in `CaptureService` is in the release AAR. What a release
+build carries no way to do is let *anyone outside the app* ask it to stall: the service
+is not exported, so the action is reachable only from the host's own process.
+
 ## Decision
 
 Ship the **detection**, not the action.
@@ -185,9 +252,11 @@ opt-in call:
   leaves the choice with them.
 
 The tunnel pause came back as a **measurement instrument**, not a product action:
-`pause_until_ms` / `capture_set_pause` / `nativePauseTunnel` (12 exports across the
+`pause_until_ms` / `capture_set_pause` / `nativePauseTunnel` (17 exports across the
 two native libraries) plus `IrminsulCapture.stallTunnel(durationMs)`, driven from
-`:app`'s `StallTestReceiver` over adb. It is what produced the stall ladder and
+`:app`'s `DebugTestReceiver` over adb — a hook that lives in the debug source set
+only, so a release APK carries no way to stall its own tunnel. It is what produced
+the stall ladder and
 the dumps that settled this question, and nothing in the capture flow calls it.
 
 ## Consequences

@@ -1,14 +1,59 @@
 # 共享解码核心 + macOS 调试前端 — 方案 v2
 
-状态：**提案，P0 已完成（2026-09-21）**。全部数字都是实测的，不是推断。
+状态：**提案，P0、P1、P2、P3 已完成（2026-09-21）**。全部数字都是实测的，不是推断。
 上下文被压缩后请以本文为准；重跑方法见最后一节。
 
 P0 落地情况：新 crate `capture/rust/irminsul-decode`（session / cache / samples /
-source / status + achievements、uiaf 一并搬入），JNI 从 901 行降到 482 行、只剩
+source / status + achievements、uiaf 一并搬入），JNI 从 901 行降到 482 行（P1 加 `nativeKeyOrigin` 后 507）、只剩
 Java 类型转换 + 一个 mutex + logcat 桥 + 回调。回归：1071/0、5285/0、盲态 2848（无样本仍 4）、
 上一版写的 known_bodies.bin 这一版照读、19 个 core 测试、符号仍 12、BlueStacks 实况仍全量收。
-遗留：Kotlin 侧 `readPcapFile` 与 core 的 `PcapFrames` 仍是两份 pcap 解析，
-P2/P3 决定 viewer 之后再把 Android 的文件源切过去。
+
+P1 落地情况（fork `2c4d9d7` + `1445848`，Android 侧同批）：
+- 信封展开后**看得见的命令数**从 1071→2007（capture.pcap）、5285→11931（reconnect.pcap）、
+  3919→12619（e2e.pcap，其中 8700 条原本藏在 `UnionCmdNotify` 里）；解析错误仍 0。
+- 内层没有藏着新的数据类别（`matches_*` 三类都在外层），所以**不动采集路径**，只动可检视性。
+- `parent_index` 进 `commands[]`（深度优先，父在前），Kotlin `PacketRecord.parentIndex` +
+  列表缩进 `↳` + 详情页「↳ inside …」；fixture 的双端门禁已反向验证（改 fixture 键名 → Rust
+  与 Kotlin 两侧测试同时红）。
+- `KeyOrigin`（dispatch / known_body / time_search）是**会话状态**，不是每包 payload 字段：
+  解不开的帧根本不产生 payload。JNI 新增 `nativeKeyOrigin`（符号 12→13），
+  `SessionPhase` 改由它推导 —— 旧推导用「列表非空」，而 dispatch 密钥也能解开握手包，
+  所以盲态曾被报成 `Collecting`（见 ADR 0004 Amendment 4）。BlueStacks 实况已看到
+  dispatch → known_body 的完整跳变。
+- `pcap-check` 不再自带 pcap 读取器，改用 core 的 `PcapFrames`/`prepare_frame`，并新增
+  `--status` 模式：吐前端将收到的 status JSON（夹具里的嵌套样本就是从 e2e.pcap 真实取来的）。
+P2 落地情况（新 bin `capture/rust/irminsul-viewer`，19 个自己的单测）：
+- 端点是 **6 个不是 4 个**：`start/stop/upload/stream` 之外还加了 `state`（进度、key origin、完成数、
+  被丢弃的 SSE 事件数）和 `body?packet=&index=`（详情面板按需取全文）。少任何一个，页面就只能
+  把全文塞进流里 —— 那正是 §4.1 里点名的做法。
+- 零依赖的 HTTP：手写请求解析 + 线程/连接，没有 tokio/axum。唯一进来的系统库是 libpcap，
+  而它只被 `live` 这一个（默认开启的）feature 带进来：`--no-default-features` 的 viewer
+  仍然只读文件与管道，`--locked` 审的就是 core 那份树加上 `pcap` 的传递依赖。
+- `--dump-jsonl` + `--once` 是**回归门**：它输出的每一行与 `pcap-check --status` 逐字节相同，
+  等于"Android 收到的 == 桌面收到的"被机器钉住了。
+- 实测**不需要把缓存抬到 512MB**（见 §9 决定 3）：e2e 全量 11996 帧跑完后 `packet=0` 仍能取到 body。
+- 回放中途会有 ~10s 的"卡住"，`sample` 栈显示在 `deduce_key → bruteforce`（密钥时间搜索），
+  不是 viewer 的问题；**P3 必须把这个状态显式画出来**，否则一个正常的搜索看起来像死机。
+
+P3 落地情况（`capture/rust/irminsul-viewer/web/index.html`，用 `include_bytes!` 编进二进制）：
+- 只有两处**浏览器实测才发现**的问题，光看代码都会漏过去，记下来免得下次省掉这步：
+  1. SSE 只发"从现在起"的事件 —— 回放跑完再开的标签页只有一行 `stream open`，而状态栏写着
+  12619 条命令。补了 `History`（带序号的环形窗口，5000 条）+ `GET /api/history?after=N`，
+  页面先补史再接活流，序号用来去掉重叠；断线重连走同一条路。窗口不满时页面顶部第一行会说明
+  "older ones aged out of the window"，不假装是完整历史。
+  2. 叶子节点当初也用 `<details>` 渲染 → 浏览器给没有 `<summary>` 的 details 画一个假
+  "Details" 折叠标题；`depth()` 在 build 时还没有父节点，所以"只展开浅层"永远为真。
+  现在叶子是 `<div class=leaf>`，展开深度当参数传。
+- 一个 packet 都不放过：完成事件之前先把那一条 packet 发出去（早先的写法在 `completed`
+  分支里 `return`，把成就包整条吞了 —— 是 `--dump-jsonl` 与 pcap-check 逐字节 diff 暴露的）。
+- 状态栏在"帧数不再增长但没暂停也没跑完"时显示 `working (key search?)`，因为
+  `sample <pid>` 证明那 10 秒卡在 `deduce_key → bruteforce`，不写出来的话跟死机一个样。
+
+已了结（2026-09-21）：Kotlin 侧 `readPcapFile` 的第二份 pcap 解析已删除——JNI 暴露
+`nativePcapOpen/Next/Close`（handle 表），Android 的文件源改读 core 的 `PcapFrames`；
+设备回环实测 726 帧与本地 `pcap-check` 计数逐条一致。`known_bodies.bin` 也能导出了
+（`IrminsulCapture.exportKnownBodies` + debug 钩子 `EXPORT_SAMPLES`），于是盲态夹具第一次
+被离线复现：`full.pcap` 带设备样本 = 10612 条命令 / 0 解析错误（不带样本 4 条）。
 
 ---
 
@@ -188,7 +233,7 @@ stove-helper 的对应做法（`pkg/helper/sniffer_packet.go:95-106`）值得抄
                         │ PlayerData + GOOD / UIAF / CSV / JSONL 导出         │
                         └───────────────┬───────────────────┬───────────────┘
                                   irminsul-jni（薄）   irminsul-viewer（bin，开发机跑）
-                                  只做 JSON 序列化 +    4 个端点(start/stop/upload/stream)
+                                  只做 JSON 序列化 +    8 个端点(stream/state/history/body/start/stop/upload)
                                   线程 + JNI 生命周期    + SSE fan-out + 自写网页前端
                                   → Android App        包墙 · 详情 · raw 树 · 回放/过滤
 ```
@@ -202,8 +247,8 @@ stove-helper 的对应做法（`pkg/helper/sniffer_packet.go:95-106`）值得抄
 1. **契约不新造**：把 `summary_status.json` 那套双端契约从 JNI 抬到 core，viewer 读同一份 fixture。
    门禁（`contract_tests` + `StatusDecoderTest`）继续锁住。前端拿到的 JSON 与 Android 拿到的**同源同形**。
 2. **回放路径零系统依赖**：用 core 自带的 pcap 解析（把 `pcap-check` 那份提升进来），
-   **不引 libpcap**，所以 mac 上 `cargo run -- --file x.pcap` 不需要 sudo、不需要 `/dev/bpf`。
-   libpcap 只在以后做 live 时才加（feature gate）。
+   所以 mac 上 `cargo run -- --file x.pcap` 不需要 sudo、不需要 `/dev/bpf`。
+   libpcap 只在 `--live` 那条路上，且是一个 optional 依赖 + `live` feature（P4 落地）。
 3. **平台差异只走 trait 注入**：样本存储（Android `filesDir` / mac `~/.irminsul` 或 `--out`）、
    日志落地、时间戳来源。core 里不出现 `jni`、`eframe`、`android`。
 4. **一条命令 = 一个可检视记录**：信封展开后，`PacketRecord` 需要 `parent`/`depth`（或 `inner_index`），
@@ -224,10 +269,11 @@ aa 库（fork）只补三件事，不重写解析模型：
 | 阶段 | 内容 | 验收（全部可机器判定） |
 |---|---|---|
 | **P0 抬核心** | `irminsul-decode` crate：pipeline + 缓存 + JSON 契约 + known bodies + `CaptureSource{Live,PcapFile}`；JNI 变薄；两份 `irminsul-core` 合一 | 1071/0、5285/0 不变；fixture 双端仍过；JNI 符号仍 12（反向验证仍会失败）；Android 实况仍全量收 |
-| **P1 拆信封 + 补可检视性** | `UnionCmdNotify` 展开、未知命令字段号树、`PacketRecord` 父子字段、`KeyRecovery` 事件 —— **一次改完 schema**；Android 详情页同步显示 raw 树 | 记录数上升且 `UnionCmdNotify` 的 `field_count` 不再是 1；`unknown` 命令从"空白"变成有字段树；fixture 双端仍过；0 解析错误不退化；并**量化"内层是否藏着未被 `matches_*` 的数据类别"**，据此决定是否扩到采集路径 |
-| **P2 viewer 骨架** | 新 bin `irminsul-viewer`：`--file <pcap>` 起 http，4 个端点 + **per-client SSE fan-out**（不抄它的单 channel）；GOOD/CSV 导出做成子命令；桌面 crate 的 `app.rs/monitor.rs/capture/*` 不再维护 | `curl -N localhost:1984/api/stream` 能收到与 Android 契约同形的 JSON；两个浏览器标签同时收得到；`cargo build --locked` 通过 |
-| **P3 自写网页前端** | 一个页面：虚拟滚动包墙 + 详情双栏（解码 JSON / 字段号 raw 树）+ 双轴过滤与独立命中表 + 噪声黑名单 + 锁底滚动 + 复制 JSON / 复制 raw + 拖入 pcap 回放；**加它没有的**：进度与 `SessionPhase`、`KeyRecovery` 内联系统行、错误提示 | `/tmp/full.pcap` 出 ≥2707、`/tmp/e2e.pcap` 出 3919，列表里直接看得见 `KeyRecovery::KnownBody` 那一行；`unknown` 命令能看到字段号树；`--dump-jsonl` 与 Android 侧输出逐行 diff |
-| **P4 可选** | mac live 后端（libpcap，feature 门控）、盲态提示/stall 刻度搬到桌面、pcapng 对齐 | — |
+| **P1 拆信封 + 补可检视性** ✅ | `UnionCmdNotify` 展开、未知命令字段号树、`PacketRecord` 父子字段、`KeyRecovery` 事件 —— **一次改完 schema**；Android 详情页同步显示 raw 树 | 已达成：记录数 1071→2007 / 5285→11931 / 3919→12619，`UnionCmdNotify` 外层 `field_count` 仍是 1 但子命令各自成行（父用 `parent_index` 指回）；fixture 双端仍过且反向验证过；解析错误仍 0；实况看到 `dispatch → known_body`；**内层不藏数据类别**（两种回放模式 items/avatars/achievements 全同），故采集路径不动 |
+| **P2 viewer 骨架** ✅ | 新 bin `irminsul-viewer`：`--file <pcap>` 起 http，端点 + **per-client SSE fan-out**（不抄它的单 channel）；GOOD/CSV 导出做成子命令；桌面 crate 的 `app.rs/monitor.rs/capture/*` 不再维护 | 已达成并实测：`curl -N /api/stream` 吐的就是 Android 契约 JSON；**两个并发客户端各收到 13 条 packet 事件、字节数完全一致**（2961B each）；`cargo build --release --locked` 通过；`--once --dump-jsonl` 与 `pcap-check --status` **逐字节相同**（md5 一致，7978 行）；stop/resume/restart 语义在 e2e 上验过（暂停后 records 停在 5336、恢复后继续、跑完 11996 再 start 回落到 5271） |
+| **P3 自写网页前端** ✅ | viewer 在 `/` 内嵌一个自写页面（无框架、无 CDN）：包墙 + 详情树 + 过滤 + 噪声黑名单 + 锁底 + 复制 JSON/raw + 拖入/上传 pcap 回放；**加它没有的**：进度、`key_origin` 内联系统行、错误提示、**迟开标签的补史** | 浏览器实测（不是看代码猜）：e2e 全量跑完后页面 4001 行、3160 行带 `↳` 缩进、徽标 `known_body`、状态栏 `11996 frames · 7978 payloads (5699 empty) · 12619 commands · 8700 in envelopes · done`；勾掉噪声 4001→2794 行；过滤 `7516` 与 `UnionCmd` 各命中同一 1250 行；详情树 `root [6] → data [1] → invokes [1] → 0 [5] → head [2]`，base64 值截断并标长度。full.pcap 走 viewer = 4 命令（无样本）；带设备导出的样本后 = 10612 命令 / 0 解析错误——P3 那条缺样本的验收已补齐 |
+| **P4 桌面实时源** ✅（pcapng 除外） | 读取器泛型化到任意 `BufRead`；viewer 三种源 `--file <pcap>` / `--file -` / `--live [iface] [--bpf <expr>]`；live 走 **libpcap**（`pcap` crate，optional + `live` feature，与 konkers 桌面版同一条路；先做的 `tcpdump` 子进程方案被用户否决，理由与实测见 ADR 0004 修正 5）；读源搬到独立线程（每接口一条），靠 20ms 读超时轮询「还有没有人在听」；桌面版盲态提示 | 已达成并实测：`--file` 与 `cat e2e.pcap \| --file -` 两份 dump 与 `pcap-check --status` **逐字节一致**（11996 帧 / 7978 payload / 12619 命令 / 8700 嵌套）。live 里不需要特权就能测的部分全测了：`--live nosuchiface` 真列出 23 个接口（`Device::list()` 不要 root），`--live en0` 给出 libpcap 原话 `/dev/bpf0: Permission denied` 和可用的退路；帧与时间戳用 libpcap 的 savefile 句柄过**同一个** pump 函数（测试 `a_capture_handle_feeds_a_replay_what_the_same_file_would`）。起不来的源记在 `/api/state.error` 里，晚开的标签也读得到（浏览器里那行接口清单就是这么来的），`--once` 碰上它退出码 1。**仍未测**：真开一个设备读实时流量（要 root）。**stall 刻度没有桌面对应物**：它是 VPN 隧道内部的黑洞开关，桌面侧唯一的杠杆是过滤/换源，见 ADR 0004 |
+| **P4 剩余** | pcapng 对齐（块格式 reader，接到同一个 `AnyFrames`） | — |
 
 P0/P1 有依赖关系（父子字段会改契约），所以信封要一次做完，不要分两次改 schema。
 
@@ -265,15 +311,19 @@ P0/P1 有依赖关系（父子字段会改契约），所以信封要一次做�
 
 ## 9. 待你拍的三个决定（不影响 P0 开工）
 
-1. 新 crate 名字与归属：`irminsul-decode` 放在 `irminsul-android/capture/rust/` 下，还是独立仓库当上游？
-   （倾向：先在 `capture/rust/` 下建，稳定后再上提，避免现在就动 submodule 结构。）
+1. ~~新 crate 名字与归属？~~ **已定**：`irminsul-decode` 与 `irminsul-viewer` 都在
+   `irminsul-android/capture/rust/` 下，viewer 与 decode/pcap-check 同级、path 依赖，
+   等稳定了再谈上提。
 2. ~~桌面 UI 走哪条路？~~ **已定（2026-09-21）**：不写桌面客户端。
    `core + irminsul-viewer(薄 bin) + 自写网页前端`；Iridium-NG 的前端**只用形、不用码**（无 LICENSE）。
    桌面 egui 那条路整体作废，`konkers/irminsul` 只当 GOOD 导出的对照参考。
    副产品：设备侧不必跑任何 server —— Android 用现成的 `dumpRawPackets` 落 pcap，`adb pull` 后拖进 viewer 回放。
    （真要实时看设备流量，再加 `adb forward tcp:1984 tcp:1984` 一类通道，属 P4。）
-3. 桌面侧缓存策略：沿用 64MB 环形、还是允许无上限/落盘？（倾向：桌面默认 512MB + `--dump-jsonl`，
-   契约字段不变。）
+3. ~~桌面侧缓存策略：沿用 64MB 环形、还是允许无上限/落盘？~~ **已定（2026-09-21，实测）**：
+   **沿用 core 的 64MB，不加 `--cache-mb`**。e2e.pcap 全量 11996 帧（12619 条命令，含 167KB 的
+   shell 包）跑完后 `/api/body?packet=0` 仍返回 200/789B —— 一包都没被驱逐。这些夹具的最大解码字节数
+   远小于 64MB，加旋钮只是把一个目前没有压力的上限变成要多测一条的路径。
+   真要跑"整天"的 pcap，`--dump-jsonl` 已经是把全文落盘的通路，比把内存顶上去更适合做版本间 diff。
 
 ---
 
@@ -291,6 +341,43 @@ done
 # 频次与信封现状（7516 = CN 7.0.0 的 UnionCmdNotify）
 /tmp/pcaptarget/release/pcap-check /tmp/capture.pcap 2>/dev/null | grep -oE 'id=[0-9]+ [A-Za-z]+' | awk '{print $2}' | sort | uniq -c | sort -rn | head
 /tmp/pcaptarget/release/pcap-check /tmp/capture.pcap 7516 2>/dev/null | sed -n '/cmd 7516/,/^\[cmd\]/p'
+
+# 前端将收到的 status JSON（走 Session，含 parent_index 与 key origin 统计）
+/tmp/pcaptarget/release/pcap-check --status /tmp/e2e.pcap 2>/dev/null | grep '^{' > /tmp/pcap_e2e.jsonl
+/tmp/viewertarget/release/irminsul-viewer --file /tmp/e2e.pcap --once --dump-jsonl /tmp/viewer_e2e.jsonl
+diff /tmp/pcap_e2e.jsonl /tmp/viewer_e2e.jsonl && echo "PARITY OK"   # 桌面 == Android 契约，逐字节
+diff /tmp/pcap_e2e.jsonl /tmp/viewer_e2e.jsonl && echo "PARITY OK"   # 桌面 == Android 契约，逐字节
+
+# 管道源必须与文件源逐字节同样（读取器只有一份实现，靠这条守住）
+cat /tmp/e2e.pcap | /tmp/viewertarget/release/irminsul-viewer --file - --once --dump-jsonl /tmp/viewer_stdin.jsonl
+diff /tmp/pcap_e2e.jsonl /tmp/viewer_stdin.jsonl && echo "STDIN PARITY OK"
+
+# 实时源：真 tcpdump 在 macOS 要 root（access_bpf 组），无 root 时用同契约的替身验证管线
+#   替身只要把 pcap 写到 stdout 就是 tcpdump：cat /tmp/e2e.pcap; sleep 3600
+PATH=/tmp/faketcp:$PATH /tmp/viewertarget/release/irminsul-viewer --live en0 --port 1994 &
+curl -s http://127.0.0.1:1994/api/state                       # source=live capture on en0
+cat /tmp/faketcp/args.txt                                     # 实测 -U -n -s 0 -w - -i en0 udp
+curl -sX POST http://127.0.0.1:1994/api/stop                  # 期望：毫秒级返回，且子进程被杀
+pgrep -fl faketcp/tcpdump || echo "capture process gone"
+# 真机版：sudo tcpdump -U -n -s0 -i en0 -w - udp | irminsul-viewer --file -
+
+# viewer 的活体验收（6 个端点；两个并发 SSE 客户端要收到同样的事件）
+/tmp/viewertarget/release/irminsul-viewer --file /tmp/e2e.pcap --port 1990 &
+curl -sN --max-time 4 http://127.0.0.1:1990/api/stream | grep -c '^event: packet'   # 跑两次，比较字节数
+curl -s http://127.0.0.1:1990/api/state
+curl -s "http://127.0.0.1:1990/api/body?packet=0&index=0"       # 全量跑完仍 200 = 64MB 没驱逐
+curl -sX POST --data-binary @/tmp/control.pcap http://127.0.0.1:1990/api/upload   # 上传→拿 path→/api/start
+# 回放中途 ~10s 不动是 deduce_key→bruteforce（sample <pid> 能看到），不是 viewer 卡死
+
+# 单条真实嵌套样本（写夹具时用得上）：
+/tmp/pcaptarget/release/pcap-check --status /tmp/e2e.pcap 2>/dev/null | python3 -c '
+import json,sys
+for line in sys.stdin:
+    if not line.startswith("{"): continue
+    s=json.loads(line); c=s["commands"]
+    i=next((i for i,x in enumerate(c) if x.get("parent_index") is not None), None)
+    if i is None: continue
+    print(json.dumps(c[c[i]])); print(json.dumps(c[i])); break'
 
 # 多会话夹具：不要用 cat a.pcap b.pcap（24 字节全局头不是 16 的倍数，会在接缝后静默截断），
 # 要解析后重写一个头 + 全部记录。
