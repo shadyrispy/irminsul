@@ -82,10 +82,15 @@ internal object NativeLib {
         }
     }
 
-    fun createSniffer(): Int {
+    /**
+     * Creates the native sniffer. [storageDir] is where it keeps the command
+     * bodies it uses to open sessions whose seed it never saw; those have to
+     * outlive the process, so the sniffer needs a directory to write them to.
+     */
+    fun createSniffer(storageDir: String): Int {
         ensureLibraryLoaded()
         return if (libraryLoaded) {
-            nativeCreateSniffer()
+            nativeCreateSniffer(storageDir)
         } else {
             -1
         }
@@ -167,7 +172,7 @@ internal object NativeLib {
     private external fun nativeInitLogging()
 
     @JvmStatic
-    private external fun nativeCreateSniffer(): Int
+    private external fun nativeCreateSniffer(storageDir: String): Int
 
     @JvmStatic
     private external fun nativeResetSession()

@@ -64,22 +64,102 @@ crypto: Unable to find the encryption key seed.        ×12
 crypto: before decryption data=…                       ×240263
 ```
 
-`bruteforce()` searches ±1500ms around `self.sent_time`, which is set from the
-*previous* command header's `sent_ms` — and `ConnectionPacket::HandshakeRequested`
-resets only `sent_kcp`/`recv_kcp`/`key`, not `sent_time`, `client_seed` or
-`possible_seeds`. The leading explanation is therefore stale per-session state: a
-long-lived sniffer centres the window on an anchor from the session it is no
-longer in, misses every time, and a fresh process (which is what every offline
-replay is) succeeds. **Not yet confirmed** — the discriminating test is to prepend
-the previous session's traffic to the same dump and watch offline replay start
-failing. An earlier version of this amendment blamed flow classification; that was
-wrong and is retracted.
+`bruteforce()` searches ±1500ms around `self.sent_time`. Two candidate faults were
+guessed at that point — a stale anchor, and anchoring on the server's clock. **Both
+are retracted; both were measured away on 2026-09-21:**
 
-What is confirmed is the cost of the instrumentation itself: forwarding the
-sniffer's INFO stream (one multi-kilobyte hex dump per packet) into the JVM
-exhausted the heap, left an `OutOfMemoryError` pending, and the next JNI call
-aborted the process in the decode thread. Fixed by routing WARN+ only, truncating,
-and clearing pending exceptions in `log_to_android`.
+- `GetPlayerTokenRsp`'s `sent_ms` is *identical* to the client's own
+  `GetPlayerTokenReq.sent_ms` (`1789914368753` in both), so the server echoes the
+  client's stamp and the anchor is not a foreign clock.
+- `HandshakeRequested` not resetting `sent_time`/`possible_seeds` is irrelevant:
+  those are overwritten by the current handshake before the first failing packet.
+
+The variable that separates the working captures from the failing ones is
+`PacketHead.client_sequence_id`, which counts packets since the client process
+started:
+
+| capture | seq at `GetPlayerTokenReq` | ±1.5s search |
+|---|---|---|
+| capture.pcap | 1 | found — 1071 commands |
+| reconnect.pcap | 1, 1, 1, ~300 | found in all four sessions |
+| reentry.pcap | 31374 | 2868 misses |
+| full.pcap | 133613 | 201 misses |
+
+A cold login (`seq = 1`) is derivable; a re-auth inside a long-running client is
+not, because the client chose its rand key once, when the process started. The
+fourth session in `reconnect.pcap` proves the mechanism from the other side: its
+seq was already past 127 and it still decoded, because the same sniffer instance
+had retained the client seed from that capture's first login.
+
+Widening the window is not the answer, and that was measured rather than argued:
+scanning ±3 hours of candidate times (108M key derivations) and then 26 hours
+backwards (468M more, which covers the emulator's entire uptime) around the
+re-auth's `sent_ms` produced **no hit**. So the seed behind a re-auth is not a
+wall-clock millisecond value reachable from that packet at all.
+
+Reading the seed directly is also closed: `GetPlayerTokenReq.clientRandKey` is a
+256-byte RSA-2048 blob, and both bundled private keys fail to decrypt it
+(`Err(Decryption)`) in the same run where the response's blob decrypts to
+`Ok(8)`. That is precisely why upstream resorts to a time search.
+
+What the sniffer's INFO stream costs when it is forwarded carelessly was also
+confirmed the hard way: the hex dumps exhausted the heap, left an
+`OutOfMemoryError` pending, and the next JNI call aborted the process in the
+decode thread. The filter now keeps INFO and drops DEBUG/`trace!` — and note
+`tracing`'s `Level` ordering is *inverted* (the least severe is the largest), so
+"this level or more severe" is `<=`, and an earlier draft written `>= WARN` was
+forwarding exactly the `trace!` hex it meant to exclude.
+
+**Amendment 3 (2026-09-21 — a blind session is opened by known plaintext, so the
+player only has to reconnect).**
+
+The title no longer holds. Restarting the process was never the cure; it only
+looked like one because a *cold* login is the single handshake the time search
+can reach. There is a second way in that needs neither seed nor anchor, and it is
+what the library now uses.
+
+The XOR key repeats every 4096 bytes, so a long enough command carries the whole
+key many times over. `PlayerShellCodeLuaShellNotify` (cmd 22485 in CN 7.0.0, the
+`WindSeedClientNotify` successor) has a 167875-byte body — 41 copies of the key —
+and its bytes were measured identical across client processes, across days, and
+across two devices: eight samples taken pairwise differ in **zero** bytes. So one
+recovered during a session we could open lets a later blind session be opened by
+majority-voting `plaintext ⊕ ciphertext` per key byte. Measured, offline:
+`full.pcap` goes from 4 commands to 2707-2848 with 0 parse errors when the sample
+is present, and a fixture that runs a cold login followed by a blind re-auth
+decodes 3919 commands with nothing injected.
+
+Two details mattered more than the idea:
+
+- The sample must be matched **tail-aligned**, not by frame length. The frame is
+  `10 + header_len + body + 2`, and `header_len` grows with
+  `client_sequence_id` (9 bytes for `seq = 1`, 11 for `seq = 133613`), so the
+  emulator's frames are exactly 2 bytes longer than the phone's. The first
+  implementation required equal lengths and never fired once.
+- A session key must be validated against the trailer, not just the two leading
+  magic bytes. The time search can hit two bytes by chance, and a false key made
+  the sniffer drop every packet after it — including the ones that would have
+  corrected it. That is why the same sample produced 4 commands before this fix
+  and 2707 after.
+
+Live on BlueStacks with the shipped build, a sniffer holding only samples loaded
+from disk and no seeds (the game re-entered the world on a connection whose
+handshake it never saw):
+
+```
+recovered session key from a known command body
+Matched item packet: 3961 items / avatar packet: 94 / achievement packet: 1845
+[SUCCESS] All data collected! Artifacts: 1045, Weapons: 217, Materials: 1231, Characters: 94, Achievements: 1845
+```
+
+Samples are written to `filesDir/known_bodies.bin` as soon as the sniffer notes
+one, and reloaded by the next process, so the capability survives an app restart.
+It expires when the game changes those payloads — roughly per version.
+
+This changes the product answer: a 50-90s kick makes the client re-authenticate,
+which is the case the attack covers, so the player tapping through 「连接已断开」 is
+enough. Killing the process was only ever needed because re-auth traffic was
+unreadable.
 
 ## Decision
 
@@ -104,19 +184,23 @@ opt-in call:
 - `:app` does not call it. Its dialog tells the player to restart the game and
   leaves the choice with them.
 
-The tunnel-pause implementation is deleted rather than kept as a tunable:
-`pause_until_ms`, `capture_set_pause` and `nativePauseTunnel` went, so the
-symbol gate reports 11 exports instead of 12.
+The tunnel pause came back as a **measurement instrument**, not a product action:
+`pause_until_ms` / `capture_set_pause` / `nativePauseTunnel` (12 exports across the
+two native libraries) plus `IrminsulCapture.stallTunnel(durationMs)`, driven from
+`:app`'s `StallTestReceiver` over adb. It is what produced the stall ladder and
+the dumps that settled this question, and nothing in the capture flow calls it.
 
 ## Consequences
 
-- A blind session is now *visible* everywhere and *repairable* nowhere by
-  default. That is the intended trade: the host either asks the player or opts
-  into the restart with its own permission declaration.
-- `killBackgroundProcesses` cannot touch a foreground process, so a host that
-  keeps the game in the foreground (a floating-window flow) stays blind even
-  with the action enabled — the player has to restart it.
-- The sniffer keeps its key across `stop`/`start` inside one process, so a
-  second session in the same process can still decrypt an ongoing game session.
-  Persisting that key across app restarts is deliberately still open, and is
-  the better answer for the cases a restart cannot reach.
+- A blind session is *visible* everywhere and *curable* by the player alone: they
+  reconnect or re-enter the game, and the library opens that session from its
+  samples. No host has to kill anything, and the library still declares no
+  permission for it.
+- The samples are the whole basis for that, so a first-ever capture of a new game
+  version is still blind until one session has been opened by handshake. The
+  file is written the moment a sample appears, and the fallback for a host with an
+  empty file is unchanged: ask the player to log in again.
+- `forceRelogin` is now a convenience rather than the fix it was believed to be.
+  It stays opt-in and unused by `:app`.
+- The sniffer keeps its key across `stop`/`start` inside one process, so a second
+  session in the same process can still decrypt an ongoing game session.

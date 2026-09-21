@@ -12,12 +12,12 @@ decryption and proto parsing, arm64-v8a only).
 ./gradlew :capture:publishToMavenLocal     # or publishReleasePublicationTo<repo>
 ```
 
-Produces `com.esc.irminsul:capture:1.5.0`.
+Produces `com.esc.irminsul:capture:1.6.0`.
 
 ## Integrate
 
 ```kotlin
-dependencies { implementation("com.esc.irminsul:capture:1.5.0") }
+dependencies { implementation("com.esc.irminsul:capture:1.6.0") }
 ```
 
 The public interface is the `com.esc.irminsul.capture` package; everything else
@@ -79,6 +79,27 @@ and the client sits on the title screen until the player re-enters, at which
 point the still-running capture catches the fresh login and completes. So the
 dial is roughly 60s, and the lever needs no extra permission — see
 `docs/adr/0004` for the ladder.
+
+### Re-entering is enough, because a re-auth is decryptable
+
+A re-auth is *not* derivable from its own handshake: the client picks its rand key
+once per process, so the packet that reveals the server's half was stamped hours
+after the seed was chosen, and no wall-clock time near it yields the key. What
+opens such a session instead is a command body the sniffer has already seen —
+the anti-cheat Lua shell payload, whose 167875 bytes carry the 4096-byte XOR key
+41 times over and which was measured identical across client processes, days and
+two devices. The sniffer keeps the four longest such bodies it decodes, persists
+them under the app's files dir (`known_bodies.bin`), and replays them against
+later traffic:
+
+```kotlin
+IrminsulCapture.initNative(context)   // takes context.filesDir for the samples
+```
+
+So a player who merely lets the game reconnect — or re-enters from the title
+screen — is enough; nothing has to be killed. A capture on a fresh game version,
+before any session has been opened once, still has no sample to work from and
+stays in `AwaitingLogin`.
 
 To replay a saved capture through the same pipeline, start with the other
 source — the module reads the file off the caller's thread:

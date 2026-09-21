@@ -24,15 +24,25 @@ not playing.
 
 ## Force re-login
 
-The only cure for a blind session, because the key comes from a handshake that
-already happened: `forceRelogin` closes the game and reopens it so its login
-runs inside the tunnel. Measured on a live client, neither a black-holed tunnel
-nor any reliable stall length does this — the client *resumes* with the old key.
-It reaches a backgrounded game only (`killBackgroundProcesses` cannot touch a
-foreground process), and it needs a permission the library deliberately does not
-declare for its hosts. So this is opt-in everywhere: `Config.autoForceRelogin`
-is off by default, and the hosts tell the player to restart the game instead of
-doing it to them. See `docs/adr/0004`.
+`forceRelogin` closes the game and reopens it so its login runs inside the
+tunnel. It is a convenience, not the cure for a blind session: the player
+reconnecting or re-entering from the title screen is enough, because a re-auth is
+decryptable from a **known body sample**. It reaches a backgrounded game only
+(`killBackgroundProcesses` cannot touch a foreground process), and it needs a
+permission the library deliberately does not declare for its hosts. So it is
+opt-in everywhere: `Config.autoForceRelogin` is off by default, and the hosts tell
+the player rather than doing it to them. See `docs/adr/0004`.
+
+## Known body sample
+
+A decrypted command body long enough to hold the whole session key — the key
+repeats every 4096 bytes, so the 167875-byte anti-cheat Lua shell body holds 41
+copies of it. Bodies are matched up **tail-aligned** with the frame's trailer,
+because the header grows with the client's packet counter. The sniffer keeps the
+four longest it decodes and the JNI layer persists them, which is what lets a
+session whose handshake was never seen — a re-auth inside a long-running client,
+whose rand key predates the capture — still be opened. Samples go stale when the
+game changes those payloads, i.e. per version.
 
 ## Decoded command
 

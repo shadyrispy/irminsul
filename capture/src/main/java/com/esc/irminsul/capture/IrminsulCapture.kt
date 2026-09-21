@@ -211,7 +211,10 @@ object IrminsulCapture {
         if (!NativeLib.isAvailable()) {
             return CaptureResult.Err(CaptureError.NativeUnavailable)
         }
-        return when (val code = NativeLib.createSniffer()) {
+        // The sniffer keeps its known-plaintext samples in the app's files dir;
+        // without one it cannot carry them into the next run.
+        val app = appContext ?: return CaptureResult.Err(CaptureError.NoActiveSession)
+        return when (val code = NativeLib.createSniffer(app.filesDir.absolutePath)) {
             0 -> CaptureResult.Ok(Unit)
             else -> CaptureResult.Err(CaptureError.SnifferInitFailed(code))
         }

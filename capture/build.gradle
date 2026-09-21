@@ -144,6 +144,8 @@ tasks.register('verifyNativeSymbols') {
     group = 'verification'
     description = 'Checks that the JNI exports in the merged .so files are exactly the external funs Kotlin declares.'
     def merged = layout.buildDirectory.dir('intermediates/merged_native_libs/debug/out/lib/arm64-v8a')
+    // Read by name: the task only exists once AGP has created the debug variant.
+    dependsOn 'mergeDebugNativeLibs'
     def nmTool = file("${android.ndkDirectory}/toolchains/llvm/prebuilt/${nmHost}/bin/llvm-nm")
     inputs.dir(merged)
     inputs.files(fileTree(dir: "${projectDir}/src/main/java", include: '**/*.kt'))
@@ -223,7 +225,7 @@ afterEvaluate {
                 from components.release
                 groupId = 'com.esc.irminsul'
                 artifactId = 'capture'
-                version = '1.5.0'
+                version = '1.6.0'
                 pom {
                     name = 'Irminsul Capture'
                     description = 'Genshin packet capture, decryption and protobuf ' +

@@ -5,10 +5,12 @@
 //! `src/main/jniLibs`.
 
 pub mod achievements;
+mod known_bodies;
 pub mod uiaf;
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Once;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -20,10 +22,11 @@ use auto_artifactarium::{
 };
 use base64::Engine;
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JClass};
+use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jint, jlong, jstring};
 
 use crate::achievements::{AchievementExport, AchievementFormat};
+use crate::known_bodies::KnownBodyStore;
 use irminsul::player_data::{ExportSettings, PlayerData};
 
 // ---------------------------------------------------------------------------
@@ -33,6 +36,8 @@ use irminsul::player_data::{ExportSettings, PlayerData};
 struct SnifferState {
     sniffer: GameSniffer,
     player_data: PlayerData,
+    /// Where the sniffer's known-plaintext samples are kept between runs.
+    known_bodies: KnownBodyStore,
     has_items: bool,
     has_avatars: bool,
     has_achievements: bool,
@@ -129,10 +134,14 @@ fn lock_global_state() -> Option<std::sync::MutexGuard<'static, Option<SnifferSt
 /// bruteforce vanished, leaving live capture undiagnosable. Route those into the
 /// same channel as the JNI's own logs.
 ///
-/// WARN and above only, and truncated: the sniffer's INFO stream is one
-/// multi-kilobyte hex dump per packet, and forwarding it exhausts the Java heap
-/// — an `OutOfMemoryError` left pending, and the next JNI call turned a lost log
-/// into `SIGABRT` in the decode thread.
+/// INFO and above only, and truncated: `trace!` carries a multi-kilobyte hex dump
+/// per packet, and forwarding it exhausts the Java heap — an `OutOfMemoryError`
+/// left pending, and the next JNI call turned a lost log into `SIGABRT` in the
+/// decode thread. INFO is where the key decisions are reported (handshake reset,
+/// seed recovered, session key deduced), so it stays.
+///
+/// Note `Level`'s `Ord` is by severity with the *least* severe largest, so
+/// "this level or more severe" reads `<=`, not `>=`.
 static TRACING_INIT: Once = Once::new();
 
 const MAX_SNIFF_LOG_LEN: usize = 300;
@@ -143,7 +152,7 @@ fn init_sniffer_tracing() {
 
     TRACING_INIT.call_once(|| {
         let layer = LogcatLayer.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
-            meta.target().starts_with("auto_artifactarium") && *meta.level() >= tracing::Level::WARN
+            meta.target().starts_with("auto_artifactarium") && *meta.level() <= tracing::Level::INFO
         }));
         let subscriber = tracing_subscriber::registry().with(layer);
         let _ = tracing::subscriber::set_global_default(subscriber);
@@ -362,9 +371,18 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
 
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeCreateSniffer(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
+    storage_dir: JString,
 ) -> jint {
+    let dir = match env.get_string(&storage_dir) {
+        Ok(dir) => Path::new(&String::from(dir)).to_path_buf(),
+        Err(_) => {
+            log_to_android("ERROR", "nativeCreateSniffer needs a usable storage dir");
+            return -4;
+        }
+    };
+
     let mut state = match lock_global_state() {
         Some(s) => s,
         None => {
@@ -383,7 +401,14 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
         }
     };
 
-    let sniffer = GameSniffer::new().set_initial_keys(keys);
+    // Samples from earlier runs are what let a session whose seed we never saw
+    // be opened at all, so they are loaded before the first packet.
+    let mut known_bodies = KnownBodyStore::open(&dir);
+    let samples = known_bodies.load();
+    let mut sniffer = GameSniffer::new().set_initial_keys(keys);
+    for body in samples {
+        sniffer = sniffer.add_known_body(body);
+    }
 
     let player_data = match init_player_data() {
         Ok(pd) => pd,
@@ -396,6 +421,7 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
     *state = Some(SnifferState {
         sniffer,
         player_data,
+        known_bodies,
         has_items: false,
         has_avatars: false,
         has_achievements: false,
@@ -497,6 +523,13 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
     let Some(GamePacket::Commands(commands)) = state.sniffer.receive_packet(prepared_packet) else {
         return std::ptr::null_mut();
     };
+
+    // This packet may have handed the sniffer a body it can use to open a later
+    // session it cannot seed. That sample is only worth keeping if it survives
+    // the app, and rewriting the file is free until the set actually changes.
+    state
+        .known_bodies
+        .store_if_changed(state.sniffer.known_bodies());
 
     let packet_id = NEXT_PACKET_ID.fetch_add(1, Ordering::Relaxed);
 
