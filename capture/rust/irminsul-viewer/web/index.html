@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Irminsul packets</title>
+<style>
+  /* No framework, no CDN: this page is served by the same binary that reads the
+     pcap, and it has to open on a laptop with no network. */
+  :root {
+    --bg: #12141a; --panel: #191c24; --line: #262a35; --text: #dfe3ec;
+    --muted: #8b93a7; --sent: #7fd1a4; --recv: #7ab8ff; --warn: #ffb86b;
+    --err: #ff7b7b; --sel: #2b3550;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 2;
+  }
+  header strong { letter-spacing: .04em; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); height: calc(100vh - 45px); }
+  #rows { margin: 0; padding: 0 0 40vh; list-style: none; overflow-y: auto; height: 100%; border-right: 1px solid var(--line); }
+  #rows li { padding: 3px 10px; border-bottom: 1px solid var(--line); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #rows li:hover { background: var(--sel); }
+  #rows li.selected { background: var(--sel); box-shadow: inset 2px 0 0 var(--recv); }
+  #rows li.nested { padding-left: 26px; }
+  #rows li .id { color: var(--muted); }
+  #rows li .name.sent { color: var(--sent); }
+  #rows li .name.recv { color: var(--recv); }
+  #rows li .size, #rows li .fields { color: var(--muted); }
+  #rows li .err { color: var(--err); }
+  #rows li.system { cursor: default; background: #14171f; color: var(--warn); }
+  #rows li.system.error { color: var(--err); }
+  #rows li.system.ok { color: var(--sent); }
+  #detail { overflow-y: auto; height: 100%; padding: 10px 12px; }
+  #detail h2 { font-size: 14px; margin: 0 0 2px; }
+  #detail .meta { color: var(--muted); margin-bottom: 8px; }
+  #detail .actions { display: flex; gap: 8px; margin-bottom: 10px; }
+  details { margin-left: 14px; }
+  details > summary { cursor: pointer; }
+  .leaf { margin-left: 22px; white-space: pre-wrap; word-break: break-all; }
+  summary .key { color: var(--muted); }
+  summary .val { color: var(--text); }
+  summary .count { color: #5f6b85; }
+  .muted { color: var(--muted); }
+  button, label.file, input[type=file] {
+    font: inherit; background: #232838; color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer;
+  }
+  label.file { display: inline-flex; gap: 6px; align-items: center; }
+  label.file input { display: none; }
+  input[type=text], input[type=search] {
+    font: inherit; background: #0e1016; color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; min-width: 180px;
+  }
+  label.chk { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); cursor: pointer; }
+  #counts { color: var(--muted); }
+  .badge { border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px; color: var(--muted); }
+  .badge.dispatch { color: var(--warn); }
+  .badge.known_body, .badge.time_search { color: var(--sent); }
+  .badge.none { color: var(--err); }
+  body.dragging #rows { outline: 2px dashed var(--recv); outline-offset: -6px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>IRMINSUL</strong>
+  <span id="source" class="muted">no source</span>
+  <span id="origin" class="badge">no key</span>
+  <span id="counts"></span>
+  <button id="start">start</button>
+  <button id="stop">stop</button>
+  <label class="file">upload<input type="file" id="pcap" accept=".pcap"></label>
+  <input type="search" id="filter" placeholder="name or cmd id" size="18">
+  <label class="chk"><input type="checkbox" id="noise"> hide combat/ability spam</label>
+  <label class="chk"><input type="checkbox" id="follow" checked> follow</label>
+</header>
+
+<main>
+  <ul id="rows"></ul>
+  <section id="detail"><p class="muted">Pick a command to fetch its body. Nothing is fetched until you ask —
+    the server holds decoded commands in a bounded ring and serializes one on demand.</p></section>
+</main>
+
+<script>
+"use strict";
+
+const NOISY = new Set(["AbilityInvocationsNotify", "CombatInvocationsNotify"]);
+const MAX_DOM = 4000;
+
+const rowsEl = document.getElementById("rows");
+const detailEl = document.getElementById("detail");
+const countsEl = document.getElementById("counts");
+const originEl = document.getElementById("origin");
+const sourceEl = document.getElementById("source");
+const filterEl = document.getElementById("filter");
+const noiseEl = document.getElementById("noise");
+const followEl = document.getElementById("follow");
+
+// Every row the stream produced, filtered only for display. A replay puts ~12k
+// commands through here, so the DOM keeps a window and this keeps the rest.
+let rows = [];
+
+const matches = (row) => {
+  if (row.system) return true;
+  if (noiseEl.checked && NOISY.has(row.name)) return false;
+  const query = filterEl.value.trim().toLowerCase();
+  if (!query) return true;
+  return row.name.toLowerCase().includes(query) || String(row.cmd_id).includes(query);
+};
+
+function rowNode(row) {
+  const li = document.createElement("li");
+  if (row.system) {
+    li.className = "system " + (row.kind === "error" ? "error" : row.kind === "complete" ? "ok" : "");
+    li.textContent = row.text;
+    return li;
+  }
+  if (row.parent_index !== null && row.parent_index !== undefined) li.classList.add("nested");
+  const name = document.createElement("span");
+  name.className = "name " + (row.direction === "sent" ? "sent" : "recv");
+  name.textContent = (row.parent_index === null || row.parent_index === undefined ? "" : "\u21B3 ") + row.name;
+  li.appendChild(name);
+  li.appendChild(document.createTextNode(" "));
+  const size = document.createElement("span");
+  size.className = "size";
+  size.textContent = row.size + "B";
+  li.appendChild(size);
+  if (row.field_count !== null && row.field_count !== undefined) {
+    const f = document.createElement("span");
+    f.className = "fields";
+    f.textContent = " \u00b7 " + row.field_count + "f";
+    li.appendChild(f);
+  }
+  if (row.parse_error) {
+    const e = document.createElement("span");
+    e.className = "err";
+    e.textContent = " \u00b7 parse error";
+    li.appendChild(e);
+  }
+  const id = document.createElement("span");
+  id.className = "id";
+  id.textContent = " \u00b7 " + row.cmd_id + " \u00b7 p" + row.packet_id + "#" + row.index;
+  li.appendChild(id);
+  li.addEventListener("click", () => open(row, li));
+  return li;
+}
+
+function append(row) {
+  rows.push(row);
+  if (!matches(row)) return;
+  rowsEl.appendChild(rowNode(row));
+  if (rowsEl.childElementCount > MAX_DOM) rowsEl.firstElementChild.remove();
+  if (followEl.checked) rowsEl.scrollTop = rowsEl.scrollHeight;
+}
+
+// A note about the whole wall belongs above it, not in its way at the bottom.
+function notice(text, kind) {
+  rows.unshift({ system: true, kind: kind || "hello", text: text });
+  const li = rowNode(rows[0]);
+  const pinned = rowsEl.scrollTop + rowsEl.clientHeight >= rowsEl.scrollHeight - 1;
+  rowsEl.insertBefore(li, rowsEl.firstElementChild);
+  // Prepending shifts everything down; re-pin so a notice does not look like the
+  // list scrolled away from the traffic.
+  if (pinned) rowsEl.scrollTop = rowsEl.scrollHeight;
+}
+
+function rerender() {
+  rowsEl.textContent = "";
+  for (const row of rows) {
+    if (!matches(row)) continue;
+    rowsEl.appendChild(rowNode(row));
+    if (rowsEl.childElementCount > MAX_DOM) break;
+  }
+  if (followEl.checked) rowsEl.scrollTop = rowsEl.scrollHeight;
+}
+
+filterEl.addEventListener("input", rerender);
+noiseEl.addEventListener("change", rerender);
+
+// Following stops the moment you scroll up, so "locked to bottom" is a state you
+// can leave without unticking anything.
+rowsEl.addEventListener("scroll", () => {
+  if (!followEl.checked) return;
+  const away = rowsEl.scrollHeight - rowsEl.scrollTop - rowsEl.clientHeight > 60;
+  if (away) followEl.checked = false;
+});
+
+function describeSystem(event) {
+  switch (event.event) {
+    case "hello": return { kind: "hello", text: "stream open (client " + event.client + ")" };
+    case "replay_loaded": return {
+      kind: "loaded",
+      text: "reading " + event.source + " (linktype " + event.linktype + ")" +
+        (event.devices && event.devices.length ? " \u00b7 " + event.devices.join(", ") : ""),
+    };
+    case "key_origin":
+      return {
+        kind: "origin",
+        text: event.origin === null
+          ? "no session key \u2014 nothing past the handshake decrypts"
+          : "session opened with: " + event.origin,
+      };
+    case "complete":
+      return { kind: "complete", text: "all data collected: " + event.artifacts + " artifacts, " + event.weapons + " weapons, " + event.materials + " materials, " + event.characters + " characters, " + event.achievements + " achievements" };
+    case "replay_finished": return { kind: "done", text: "replay finished: " + event.records + " records, " + event.commands + " commands (" + event.nested_commands + " inside envelopes)" };
+    case "error": return { kind: "error", text: event.message };
+    default: return { kind: "other", text: JSON.stringify(event) };
+  }
+}
+
+// A source that decodes nothing says so once, not every second.
+let blindHinted = false;
+
+function reset(newSource) {
+  rows = [];
+  rowsEl.textContent = "";
+  detailEl.textContent = "";
+  lastSeq = -1;
+  blindHinted = false;
+  if (newSource) sourceEl.textContent = newSource;
+}
+
+// The stream carries only what happens from now on, so a tab opened after the
+// replay ran would sit there showing nothing next to a status bar reporting 12k
+// commands. Every payload has a sequence number, so: catch up, then keep up, and
+// drop whatever arrived in between twice.
+let source = null;
+let lastSeq = -1;
+let caughtUp = false;
+let pending = [];
+
+function renderPacket(seq, payload) {
+  if (seq <= lastSeq) return;
+  lastSeq = seq;
+  for (let i = 0; i < payload.commands.length; i++) {
+    append(Object.assign({ packet_id: payload.packet_id, index: i }, payload.commands[i]));
+  }
+}
+
+async function catchUp() {
+  try {
+    const response = await fetch("/api/history?after=" + lastSeq);
+    const history = await response.json();
+    for (const item of history.payloads) renderPacket(item.seq, item.payload);
+    if (history.oldest_seq !== null && history.oldest_seq > 0) {
+      notice("showing payloads " + history.oldest_seq + "-" + history.next_seq + "; older ones aged out of the window");
+    }
+  } catch (e) {
+    append({ system: true, kind: "error", text: "could not catch up: " + e });
+  }
+  caughtUp = true;
+  const queued = pending;
+  pending = [];
+  for (const [seq, payload] of queued) renderPacket(seq, payload);
+}
+
+function connect() {
+  if (source) source.close();
+  source = new EventSource("/api/stream");
+  source.onopen = () => { caughtUp = false; catchUp(); };
+  source.addEventListener("packet", (message) => {
+    const seq = Number(message.lastEventId);
+    const payload = JSON.parse(message.data);
+    if (!caughtUp) { pending.push([seq, payload]); return; }
+    renderPacket(seq, payload);
+  });
+  source.addEventListener("system", (message) => {
+    const event = JSON.parse(message.data);
+    if (event.event === "replay_loaded") reset(event.source);
+    const described = describeSystem(event);
+    if (described) append(Object.assign({ system: true }, described));
+  });
+  source.onerror = () => {
+    // EventSource reconnects on its own, and `onopen` then catches up on whatever
+    // the gap lost — but say it, so a hole in the wall is not read as no traffic.
+    append({ system: true, kind: "error", text: "stream interrupted — reconnecting" });
+  };
+}
+connect();
+
+// ---- detail pane -----------------------------------------------------------
+
+async function open(row, li) {
+  for (const old of rowsEl.querySelectorAll("li.selected")) old.classList.remove("selected");
+  li.classList.add("selected");
+  detailEl.textContent = "";
+  const head = document.createElement("h2");
+  head.textContent = row.name;
+  detailEl.appendChild(head);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = row.cmd_id + " \u00b7 " + row.size + "B \u00b7 " + row.direction +
+    " \u00b7 packet " + row.packet_id + " command " + row.index +
+    (row.field_count === null || row.field_count === undefined ? " \u00b7 no schema" : " \u00b7 " + row.field_count + " fields") +
+    (row.parent_index === null || row.parent_index === undefined ? "" : " \u00b7 inside command " + row.parent_index);
+  detailEl.appendChild(meta);
+
+  let text = "";
+  try {
+    const response = await fetch("/api/body?packet=" + row.packet_id + "&index=" + row.index);
+    const value = await response.json();
+    if (!response.ok) {
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.textContent = value.error || ("http " + response.status);
+      detailEl.appendChild(p);
+      return;
+    }
+    text = JSON.stringify(value, null, 2);
+    detailEl.appendChild(tree("root", value, 0));
+  } catch (e) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "fetch failed: " + e;
+    detailEl.appendChild(p);
+    return;
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const copy = document.createElement("button");
+  copy.textContent = "copy JSON";
+  copy.addEventListener("click", () => navigator.clipboard.writeText(text));
+  const raw = document.createElement("button");
+  raw.textContent = "copy raw body";
+  raw.addEventListener("click", async () => {
+    const response = await fetch("/api/raw?packet=" + row.packet_id + "&index=" + row.index);
+    const value = await response.json();
+    navigator.clipboard.writeText(value.error ? JSON.stringify(value) : value.proto_data_base64);
+  });
+  actions.appendChild(copy);
+  actions.appendChild(raw);
+  detailEl.insertBefore(actions, detailEl.children[1]);
+}
+
+function tree(key, value, depth) {
+  if (value === null || typeof value !== "object") {
+    const leaf = document.createElement("div");
+    leaf.className = "leaf";
+    const k = document.createElement("span");
+    k.className = "key";
+    k.textContent = key + ": ";
+    const v = document.createElement("span");
+    v.className = "val";
+    // A base64 body is the value you least want pasted across a screen, and the
+    // one you most want to know the length of.
+    const text = typeof value === "string" && value.length > 120
+      ? value.slice(0, 120) + "\u2026 (" + value.length + " chars)"
+      : JSON.stringify(value);
+    v.textContent = text;
+    leaf.appendChild(k);
+    leaf.appendChild(v);
+    return leaf;
+  }
+
+  const entries = Array.isArray(value)
+    ? value.map((item, i) => [String(i), item])
+    : Object.entries(value);
+  const box = document.createElement("details");
+  box.open = depth < 1;
+  const summary = document.createElement("summary");
+  const k = document.createElement("span");
+  k.className = "key";
+  k.textContent = key;
+  const c = document.createElement("span");
+  c.className = "count";
+  c.textContent = " [" + entries.length + "]";
+  summary.appendChild(k);
+  summary.appendChild(c);
+  box.appendChild(summary);
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "leaf muted";
+    empty.textContent = "(empty)";
+    box.appendChild(empty);
+  }
+  for (const [childKey, childValue] of entries) {
+    box.appendChild(tree(childKey, childValue, depth + 1));
+  }
+  return box;
+}
+
+// ---- controls --------------------------------------------------------------
+
+document.getElementById("start").addEventListener("click", () => post("/api/start"));
+document.getElementById("stop").addEventListener("click", () => post("/api/stop", null));
+document.getElementById("pcap").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (file) await upload(file);
+  event.target.value = "";
+});
+
+async function post(path, body) {
+  await fetch(path, { method: "POST", body: body ?? undefined, headers: body ? { "content-type": "application/json" } : undefined });
+}
+
+async function upload(file) {
+  append({ system: true, kind: "hello", text: "uploading " + file.name + " (" + file.size + "B)" });
+  const response = await fetch("/api/upload", { method: "POST", body: file });
+  const value = await response.json();
+  if (value.warning) append({ system: true, kind: "error", text: value.warning });
+  if (value.error) { append({ system: true, kind: "error", text: value.error }); return; }
+  await post("/api/start", JSON.stringify({ file: value.file }));
+}
+
+// Drag a pcap anywhere onto the list to replay it.
+rowsEl.addEventListener("dragover", (event) => { event.preventDefault(); document.body.classList.add("dragging"); });
+rowsEl.addEventListener("dragleave", () => document.body.classList.remove("dragging"));
+rowsEl.addEventListener("drop", (event) => {
+  event.preventDefault();
+  document.body.classList.remove("dragging");
+  const file = event.dataTransfer.files[0];
+  if (file) upload(file);
+});
+
+// ---- status bar ------------------------------------------------------------
+
+let lastRecords = -1;
+let lastTick = Date.now();
+// Whatever the server last failed at, as told to this tab. A fresh tab gets it from
+// /api/state rather than missing it because it subscribed one event late.
+let lastError = null;
+async function poll() {
+  try {
+    const response = await fetch("/api/state");
+    const state = await response.json();
+    sourceEl.textContent = state.source || "no source";
+    originEl.textContent = state.key_origin || "no key";
+    originEl.className = "badge " + (state.key_origin || "none");
+    // The desktop counterpart of the phone's re-login prompt. Payloads with no
+    // commands behind them is one condition and one remedy, and a wall that stays
+    // empty does not say which of the two it is waiting on.
+    if (!blindHinted && state.payloads > 0 && state.commands === 0 && !state.key_origin) {
+      blindHinted = true;
+      notice("nothing decrypts: this source carries no session key. Replay it with " +
+        "--samples <dir> of known command bodies (the phone exports them with " +
+        "com.esc.irminsul.EXPORT_SAMPLES), or capture from the moment the client logs in.",
+        "error");
+    }
+    if (state.error && state.error !== lastError) {
+      lastError = state.error;
+      notice(state.error, "error");
+    }
+    let line = state.records + " frames \u00b7 " + state.payloads + " payloads (" + state.empty_payloads + " empty) \u00b7 " +
+      state.commands + " commands \u00b7 " + state.nested_commands + " in envelopes";
+    if (!state.paused && state.records === 0) line += " \u00b7 waiting for a first frame";
+    if (state.dropped_events) line += " \u00b7 " + state.dropped_events + " stream events dropped";
+    if (state.finished) line += " \u00b7 done";
+    else if (!state.paused && state.records === lastRecords && Date.now() - lastTick > 2500) {
+      // The key search is CPU work between frames: no new packet is the only
+      // thing it looks like, and that alone reads as a hang.
+      line += " \u00b7 working (key search?)";
+    } else if (state.paused && !state.finished) line += " \u00b7 paused";
+    if (state.records !== lastRecords) lastTick = Date.now();
+    lastRecords = state.records;
+    countsEl.textContent = line;
+  } catch (e) {
+    countsEl.textContent = "server unreachable";
+  }
+}
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

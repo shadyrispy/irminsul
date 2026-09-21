@@ -17,3 +17,4 @@ design/
 capture/rust/pcap-check/target/
 capture-sample/build/
 capture/rust/irminsul-decode/target/
+capture/rust/irminsul-viewer/target/

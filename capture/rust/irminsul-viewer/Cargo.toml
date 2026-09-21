@@ -1,0 +1,26 @@
+[package]
+name = "irminsul-viewer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A debugging binary, not a library: it exists so a pcap on a laptop shows the same
+# JSON the phone shows, with no GUI toolkit and no capture privileges to install.
+
+[features]
+# Live capture is the one part that links a system library, so it is the one part
+# that can be left out: without it the viewer still replays files and pipes, and
+# `--live` answers with why it is not available.
+default = ["live"]
+live = ["dep:pcap"]
+
+[dependencies]
+irminsul-decode = { path = "../irminsul-decode" }
+anyhow = "1.0.99"
+serde_json = { version = "1", features = ["alloc"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Blocking reads on a thread of the viewer's own, so no async feature of this crate
+# is needed — the reference desktop app wants `capture-stream` only because its UI
+# is async.
+pcap = { version = "2", optional = true }
