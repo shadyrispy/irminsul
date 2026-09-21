@@ -1,0 +1,22 @@
+[package]
+name = "irminsul-decode"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "irminsul_decode"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+# Game data and the GOOD export, shared with the Android module and the desktop
+# reference implementation.
+irminsul = { path = "../irminsul-core" }
+auto-artifactarium = { git = "https://github.com/konkers/auto-artifactarium", rev = "4ba25fac64b88970143af6bc2a2ef51338e620d0" }
+anyhow = "1.0.99"
+base64 = "0.22.1"
+chrono = "0.4.42"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.143", features = ["alloc"] }
+tracing = "0.1"

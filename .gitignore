@@ -16,3 +16,4 @@ capture/rust/irminsul-jni/.cargo.disabled-local-patch/
 design/
 capture/rust/pcap-check/target/
 capture-sample/build/
+capture/rust/irminsul-decode/target/

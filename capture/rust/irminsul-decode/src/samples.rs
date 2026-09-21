@@ -1,16 +1,18 @@
-//! Persistence for the command bodies the sniffer keeps as known plaintexts.
+//! Persistence for the command bodies the session keeps as known plaintexts.
 //!
 //! Those bodies are what allow a later session — one whose key cannot be derived
 //! from a seed, because the client re-authenticated inside a process we did not
 //! see start — to be decrypted at all. They stay valid until the game changes
-//! them, which is roughly once per version, so they have to survive the app.
+//! them, which is roughly once per version, so they have to survive the front end.
 //!
-//! The file is rewritten only when the sniffer notes a body it did not have,
+//! The file is rewritten only when the session gains a body it did not have,
 //! which is a handful of times per game version rather than per packet.
 
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use tracing::{info, warn};
 
 const MAGIC: &[u8; 8] = b"IRMSKBDY";
 const FORMAT_VERSION: u32 = 1;
@@ -18,48 +20,47 @@ const FORMAT_VERSION: u32 = 1;
 const MAX_BODY_LEN: u32 = 4 * 1024 * 1024;
 const MAX_BODIES: usize = 16;
 
-pub struct KnownBodyStore {
+pub struct SampleStore {
     path: PathBuf,
-    /// Body lengths as they are on disk right now, so an unchanged sniffer does
-    /// not rewrite the file on every packet.
+    /// Body lengths as they are on disk right now, so an unchanged set of samples
+    /// does not rewrite the file on every packet.
     written: Vec<usize>,
 }
 
-impl KnownBodyStore {
-    pub fn open(dir: &Path) -> Self {
+impl SampleStore {
+    /// A store rooted at `dir`. With no directory the store still works, it just
+    /// never reads or writes anything — which is what a stateless viewer wants.
+    pub fn open(dir: Option<&Path>) -> Self {
         Self {
-            path: dir.join("known_bodies.bin"),
+            path: dir.map(|dir| dir.join("known_bodies.bin")).unwrap_or_default(),
             written: Vec::new(),
         }
     }
 
+    pub fn is_persistent(&self) -> bool {
+        !self.path.as_os_str().is_empty()
+    }
+
     /// The bodies saved by an earlier run. A file that fails to parse is not an
-    /// error worth surfacing: a sniffer with no samples still works for every
-    /// session it can seed, so the worst case is falling back to that.
+    /// error worth surfacing: a session with no samples still works for every
+    /// handshake it can seed, so the worst case is falling back to that.
     pub fn load(&mut self) -> Vec<Vec<u8>> {
+        if !self.is_persistent() {
+            return Vec::new();
+        }
         let Ok(bytes) = fs::read(&self.path) else {
             return Vec::new();
         };
         let Some(bodies) = parse(&bytes) else {
-            crate::log_to_android(
-                "WARN",
-                &format!("Ignoring unreadable {}", self.path.display()),
-            );
+            warn!(path = %self.path.display(), "ignoring unreadable known-body file");
             return Vec::new();
         };
         self.written = bodies.iter().map(Vec::len).collect();
         if !bodies.is_empty() {
-            crate::log_to_android(
-                "INFO",
-                &format!(
-                    "Loaded {} known body sample(s): {}",
-                    bodies.len(),
-                    self.written
-                        .iter()
-                        .map(usize::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
+            info!(
+                count = bodies.len(),
+                lengths = ?self.written,
+                "loaded known body samples"
             );
         }
         bodies
@@ -67,11 +68,15 @@ impl KnownBodyStore {
 
     /// Write `bodies` out if they differ from what is already on disk.
     pub fn store_if_changed(&mut self, bodies: &[Vec<u8>]) {
+        if !self.is_persistent() {
+            return;
+        }
         let lengths: Vec<usize> = bodies.iter().map(Vec::len).collect();
         if lengths == self.written {
             return;
         }
-        let mut bytes: Vec<u8> = Vec::with_capacity(16 + bodies.iter().map(Vec::len).sum::<usize>());
+        let mut bytes: Vec<u8> =
+            Vec::with_capacity(16 + bodies.iter().map(Vec::len).sum::<usize>());
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
         bytes.extend_from_slice(&(bodies.len() as u32).to_le_bytes());
@@ -92,12 +97,9 @@ impl KnownBodyStore {
         match outcome {
             Ok(()) => {
                 self.written = lengths;
-                crate::log_to_android(
-                    "INFO",
-                    &format!("Saved {} known body sample(s)", bodies.len()),
-                );
+                info!(count = bodies.len(), "saved known body samples");
             }
-            Err(e) => crate::log_to_android("WARN", &format!("Could not save known bodies: {e}")),
+            Err(e) => warn!("could not save known bodies: {e}"),
         }
     }
 }
@@ -156,7 +158,7 @@ mod tests {
 
     /// A temp dir unique to the calling test, since these run in parallel.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("irminsul-known-{name}"));
+        let dir = std::env::temp_dir().join(format!("irminsul-samples-{name}"));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -167,18 +169,18 @@ mod tests {
         let dir = scratch("round_trip");
         let bodies = vec![vec![7u8; 4096], vec![9u8; 100]];
 
-        KnownBodyStore::open(&dir).store_if_changed(&bodies);
+        SampleStore::open(Some(&dir)).store_if_changed(&bodies);
 
-        let mut reopened = KnownBodyStore::open(&dir);
+        let mut reopened = SampleStore::open(Some(&dir));
         assert_eq!(reopened.load(), bodies);
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn an_unchanged_sniffer_does_not_rewrite_the_file() {
+    fn an_unchanged_set_of_bodies_does_not_rewrite_the_file() {
         let dir = scratch("no_rewrite");
         let bodies = vec![vec![1u8; 64]];
-        let mut store = KnownBodyStore::open(&dir);
+        let mut store = SampleStore::open(Some(&dir));
         store.store_if_changed(&bodies);
         let stamp = fs::metadata(dir.join("known_bodies.bin")).unwrap().modified().unwrap();
 
@@ -190,11 +192,19 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_file_is_empty_samples_not_a_failure() {
+    fn a_missing_file_is_no_bodies_rather_than_a_failure() {
         let dir = scratch("missing");
-        let mut store = KnownBodyStore::open(&dir);
+        let mut store = SampleStore::open(Some(&dir));
         assert!(store.load().is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_store_without_a_directory_stays_in_memory() {
+        let mut store = SampleStore::open(None);
+        assert!(!store.is_persistent());
+        store.store_if_changed(&[vec![1u8; 10]]);
+        assert!(store.load().is_empty());
     }
 
     #[test]
