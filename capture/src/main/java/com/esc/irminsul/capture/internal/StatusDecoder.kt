@@ -66,7 +66,8 @@ internal object StatusDecoder {
                         fieldCount = if (cmd.isNull("field_count")) null else cmd.optInt("field_count"),
                         briefKeys = stringList(cmd.optJSONArray("brief_keys")),
                         parseError = cmd.optBoolean("parse_error", false),
-                        timestampMillis = timestampMillis
+                        timestampMillis = timestampMillis,
+                        parentIndex = if (cmd.isNull("parent_index")) null else cmd.optInt("parent_index")
                     )
                 )
             }

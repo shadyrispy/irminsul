@@ -16,5 +16,12 @@ data class PacketRecord(
     val fieldCount: Int?,
     val briefKeys: List<String>,
     val parseError: Boolean,
-    val timestampMillis: Long
+    val timestampMillis: Long,
+    /**
+     * Position, within the same packet, of the batch envelope that carried this
+     * command — `UnionCmdNotify` delivers dozens of commands at once. Null for a
+     * command that arrived on its own. A list ordered by [commandIndex] keeps a
+     * parent above its children, so this is all a view needs to indent them.
+     */
+    val parentIndex: Int? = null
 )

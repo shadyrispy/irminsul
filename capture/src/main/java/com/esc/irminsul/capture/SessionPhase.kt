@@ -5,15 +5,20 @@ package com.esc.irminsul.capture
  * session too late" is otherwise indistinguishable from "the game is not
  * playing": both look like zero decoded commands.
  *
- * The session key can only come from the handshake's `GetPlayerTokenRsp`, so a
- * session that starts after the game connected stays unable to decrypt until the
- * game logs in again — see [IrminsulCapture.forceRelogin].
+ * Derived from [IrminsulCapture.keyOrigin], because a session holding only the
+ * dispatch key does decode some commands — the handshake's own — and would look
+ * like it was collecting.
  */
 enum class SessionPhase {
     /** No capture session is running. */
     Idle,
 
-    /** Game traffic in the tunnel, but nothing has decrypted: no key yet. */
+    /**
+     * Game traffic in the tunnel, but no session key: nothing beyond the
+     * handshake's own packets can be read. Ends when the tunnel catches a login
+     * ([IrminsulCapture.forceRelogin]) or when a saved command body opens the
+     * session ([KeyOrigin.KnownBody]).
+     */
     AwaitingLogin,
 
     /** Commands are decoding; the full snapshots have not all arrived. */

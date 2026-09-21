@@ -1,6 +1,8 @@
 package com.esc.irminsul
 
 import com.esc.irminsul.capture.IrminsulCapture
+import com.esc.irminsul.ui.IrminsulTheme
+import com.esc.irminsul.ui.MainScreen
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle

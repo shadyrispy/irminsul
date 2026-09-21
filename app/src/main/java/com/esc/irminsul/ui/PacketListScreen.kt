@@ -65,7 +65,10 @@ fun PacketListScreen(
                 it.name.contains(query, ignoreCase = true) || it.cmdId.toString().contains(query)
             }
         }
-        matching.asReversed()
+        // Newest packet first, but a packet's own commands in arrival order: a
+        // batch envelope has to sit above the commands it carried for the
+        // indentation below to read as nesting.
+        matching.sortedWith(compareByDescending<PacketRecord> { it.packetId }.thenBy { it.commandIndex })
     }
 
     Column(
@@ -167,11 +170,14 @@ private fun PacketRow(
             .heightIn(min = 72.dp)
             .background(containerColor, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
+            // A command carried by a batch envelope is offset, so the list reads
+            // as the tree the game actually sent rather than as equal peers.
+            .padding(start = if (record.parentIndex == null) 0.dp else 24.dp)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = record.name,
+                text = if (record.parentIndex == null) record.name else "↳ ${record.name}",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium,
                 color = titleColor,

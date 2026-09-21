@@ -16,7 +16,8 @@
       "header_len": 10,
       "size": 0,
       "field_count": null,
-      "brief_keys": []
+      "brief_keys": [],
+      "parent_index": null
     },
     {
       "cmd_id": 26915,
@@ -25,7 +26,8 @@
       "header_len": 10,
       "size": 12,
       "field_count": 3,
-      "brief_keys": ["gadget", "ctx"]
+      "brief_keys": ["gadget", "ctx"],
+      "parent_index": null
     },
     {
       "cmd_id": 6529,
@@ -35,7 +37,28 @@
       "size": 2242,
       "field_count": null,
       "brief_keys": [],
-      "parse_error": true
+      "parse_error": true,
+      "parent_index": null
+    },
+    {
+      "cmd_id": 7516,
+      "name": "UnionCmdNotify",
+      "direction": "sent",
+      "header_len": 10,
+      "size": 603,
+      "field_count": 1,
+      "brief_keys": ["cmdList"],
+      "parent_index": null
+    },
+    {
+      "cmd_id": 20355,
+      "name": "AbilityInvocationsNotify",
+      "direction": "sent",
+      "header_len": 0,
+      "size": 28,
+      "field_count": 1,
+      "brief_keys": ["invokes"],
+      "parent_index": 3
     }
   ]
 }

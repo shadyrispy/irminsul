@@ -37,8 +37,9 @@ import kotlinx.coroutines.launch
  *
  * A host crosses exactly one seam — this object plus [DataStatus],
  * [DataStatusSink], [PacketRecord], [CaptureSource], [CaptureResult],
- * [PermissionSnapshot] and [Completion]. Everything else in the module is
- * `internal` and lives in `…capture.internal`.
+ * [PermissionSnapshot], [Completion], [SessionPhase], [CaptureTraffic] and
+ * [KeyOrigin]. Everything else in the module is `internal` and lives in
+ * `…capture.internal`.
  *
  * Typical flow: [initNative] once at startup, [refreshPermissions] /
  * [openFixSettings] until [PermissionKind.Vpn] is granted, then
@@ -84,6 +85,13 @@ object IrminsulCapture {
 
     /** Bytes and connections the capture loop has accounted for. */
     val traffic: StateFlow<CaptureTraffic> = CaptureStatus.traffic
+
+    /**
+     * Which key is decrypting the session right now, and so how it was opened.
+     * Null while nothing has opened it — including after a client re-logs in and
+     * takes the previous key with it.
+     */
+    val keyOrigin: StateFlow<KeyOrigin?> = CaptureStatus.keyOrigin
 
     /** Diagnostic lines forwarded from the native stack. No replay. */
     private val _logs = MutableSharedFlow<String>(extraBufferCapacity = 256)
@@ -166,19 +174,21 @@ object IrminsulCapture {
     }
 
     /**
-     * Whether this session can decrypt yet. Derived, never stored: no key can
-     * exist until the tunnel sees the handshake's token response, so a session
-     * that starts mid-game sits in [SessionPhase.AwaitingLogin] with traffic
-     * flowing and nothing decoding — the state [forceRelogin] exists to end.
+     * Whether this session can decrypt yet. Derived from [keyOrigin], never
+     * stored: the dispatch key opens only the handshake's own packets, so a
+     * session with nothing else sits in [SessionPhase.AwaitingLogin] with traffic
+     * flowing and its gameplay encrypted — the state [forceRelogin] exists to end.
+     * A decoded-command count cannot answer this, because those handshake packets
+     * make a blind session look like it is collecting.
      */
     val sessionPhase: StateFlow<SessionPhase> = combine(
-        isCapturing, packets, completion
-    ) { capturing, decoded, done ->
+        isCapturing, keyOrigin, completion
+    ) { capturing, origin, done ->
         when {
             !capturing -> SessionPhase.Idle
             done != null -> SessionPhase.Complete
-            decoded.isNotEmpty() -> SessionPhase.Collecting
-            else -> SessionPhase.AwaitingLogin
+            origin == null || origin == KeyOrigin.Dispatch -> SessionPhase.AwaitingLogin
+            else -> SessionPhase.Collecting
         }
     }.stateIn(scope, SharingStarted.Eagerly, SessionPhase.Idle)
 
@@ -281,11 +291,13 @@ object IrminsulCapture {
     }
 
     /**
-     * Manufactures a login, the only thing that can save a capture that joined
-     * mid-session: the game's cached process is stopped and it is relaunched, so
-     * its handshake runs in front of the already-running tunnel.
+     * Manufactures a login: the game's cached process is stopped and it is
+     * relaunched, so its handshake runs in front of the already-running tunnel.
      *
-     * Verified against a live client: neither a black-holed tunnel nor a short
+     * Not the only way into a session any more — one whose handshake was missed
+     * can also be opened from a command body seen in an earlier session, see
+     * [KeyOrigin.KnownBody] — but until such a sample exists on this device, this
+     * is. Verified against a live client: neither a black-holed tunnel nor a short
      * outage does this — the client *resumes* with the key the capture never saw,
      * and no stall length is reliable (25s of silence re-logged in, 33s did not).
      * Only a new process re-logs in. See `docs/adr/0004`.
@@ -450,6 +462,23 @@ object IrminsulCapture {
         return CaptureResult.Ok(body)
     }
 
+    /**
+     * Copies the sniffer's known-body samples into [destDir] and returns where the
+     * copy landed. Those samples are what let a capture that never saw a handshake
+     * decrypt anything, and on devices where `run-as` is refused the app's own files
+     * dir cannot be read — so this is how they get to somewhere a host can pick up.
+     * `PayloadUnavailable` means there is nothing to export yet: no session has
+     * decoded a body long enough to carry a key.
+     */
+    fun exportKnownBodies(destDir: String): CaptureResult<String> {
+        if (!NativeLib.isAvailable()) {
+            return CaptureResult.Err(CaptureError.NativeUnavailable)
+        }
+        val path = NativeLib.exportKnownBodies(destDir)
+            ?: return CaptureResult.Err(CaptureError.PayloadUnavailable)
+        return CaptureResult.Ok(path)
+    }
+
     /** Posts the completion notification with sample counts, for testing heads-up. */
     fun showCompletionPreview(context: Context) {
         CaptureNotifier.showCompletion(context, 1, 2, 3, 4)
@@ -473,6 +502,7 @@ object IrminsulCapture {
         ring.clear()
         CaptureStatus.resetDroppedPackets()
         CaptureStatus.resetTraffic()
+        CaptureStatus.resetKeyOrigin()
         val queue = LinkedBlockingQueue<RawPacket>(config.queueCapacity)
         val worker = PacketProcessor(sink, ring, queue, config.onDataUpdated)
         processor = worker

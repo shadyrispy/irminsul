@@ -9,7 +9,7 @@
 //! which is a handful of times per game version rather than per packet.
 
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
@@ -39,6 +39,27 @@ impl SampleStore {
 
     pub fn is_persistent(&self) -> bool {
         !self.path.as_os_str().is_empty()
+    }
+
+    /// Copy the sample file into `dest_dir`, keeping its name, and report where
+    /// it landed. `None` when there is nothing to hand over yet.
+    ///
+    /// This exists because a host cannot always reach the app's own files dir:
+    /// on devices where `run-as` is refused, these bytes — the difference between
+    /// a blind capture and a readable one — are otherwise stuck on the device.
+    pub fn export_to(&self, dest_dir: &Path) -> io::Result<Option<PathBuf>> {
+        if !self.is_persistent() || !self.path.is_file() {
+            return Ok(None);
+        }
+        fs::create_dir_all(dest_dir)?;
+        let name = self
+            .path
+            .file_name()
+            .expect("a persistent store has a file name");
+        let dest = dest_dir.join(name);
+        let copied = fs::copy(&self.path, &dest)?;
+        info!(path = %dest.display(), bytes = copied, "exported known body samples");
+        Ok(Some(dest))
     }
 
     /// The bodies saved by an earlier run. A file that fails to parse is not an
@@ -222,5 +243,26 @@ mod tests {
     #[test]
     fn a_foreign_file_is_rejected() {
         assert_eq!(parse(&[0u8; 32]), None);
+    }
+
+    #[test]
+    fn samples_can_be_handed_to_a_directory_the_host_can_read() {
+        let dir = scratch("export_from");
+        let dest = scratch("export_to").join("out");
+        let mut store = SampleStore::open(Some(&dir));
+        assert!(
+            store.export_to(&dest).unwrap().is_none(),
+            "nothing has been written yet, so there is nothing to export"
+        );
+
+        store.store_if_changed(&[vec![9u8; 64]]);
+        let exported = store.export_to(&dest).unwrap().expect("a file to export");
+        assert_eq!(exported.file_name().unwrap().to_str().unwrap(), "known_bodies.bin");
+        assert_eq!(fs::read(&exported).unwrap(), fs::read(&dir.join("known_bodies.bin")).unwrap());
+
+        let mut reload = SampleStore::open(Some(&dest));
+        assert_eq!(reload.load().iter().map(Vec::len).collect::<Vec<_>>(), vec![64]);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dest.parent().unwrap());
     }
 }

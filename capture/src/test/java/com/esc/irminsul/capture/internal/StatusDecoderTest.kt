@@ -1,5 +1,6 @@
 package com.esc.irminsul.capture.internal
 
+import com.esc.irminsul.capture.KeyOrigin
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -8,8 +9,8 @@ import org.junit.Test
 /**
  * The Kotlin half of the payload contract. `/summary_status.json` is the same
  * file the native producer asserts against in
- * `capture/rust/irminsul-jni/src/lib.rs` (`contract_tests`), so renaming a key
- * on one side fails the other side's test rather than reading back as zero.
+ * `capture/rust/irminsul-decode/src/status.rs` (`contract_tests`), so renaming a
+ * key on one side fails the other side's test rather than reading back as zero.
  */
 class StatusDecoderTest {
 
@@ -37,7 +38,7 @@ class StatusDecoderTest {
     @Test
     fun `maps every command summary onto a record`() {
         val records = StatusDecoder.decode(fixture, 99L)!!.records
-        assertEquals(3, records.size)
+        assertEquals(5, records.size)
 
         val unknown = records[0]
         assertEquals(7L, unknown.packetId)
@@ -65,6 +66,15 @@ class StatusDecoderTest {
     }
 
     @Test
+    fun `a command inside a batch envelope records which one carried it`() {
+        val records = StatusDecoder.decode(fixture, 99L)!!.records
+        assertEquals("an envelope that came on its own has no parent", null, records[3].parentIndex)
+        assertEquals(7516, records[3].cmdId)
+        assertEquals(3, records[4].parentIndex)
+        assertEquals("AbilityInvocationsNotify", records[4].name)
+    }
+
+    @Test
     fun `payload without commands decodes to an empty batch`() {
         val update = StatusDecoder.decode(
             """{"packet_id":1,"has_items":false,"artifact_count":0}""",
@@ -78,5 +88,16 @@ class StatusDecoderTest {
     @Test
     fun `malformed payload decodes to null instead of throwing`() {
         assertNull(StatusDecoder.decode("not json", 0L))
+    }
+
+    /** The names `key_origin_name` in the Rust core produces, listed here again. */
+    @Test
+    fun `every key origin name round-trips from the wire`() {
+        assertEquals(KeyOrigin.Dispatch, KeyOrigin.fromWire("dispatch"))
+        assertEquals(KeyOrigin.KnownBody, KeyOrigin.fromWire("known_body"))
+        assertEquals(KeyOrigin.TimeSearch, KeyOrigin.fromWire("time_search"))
+        assertEquals(3, KeyOrigin.entries.size)
+        assertNull("an unknown origin must not be guessed at", KeyOrigin.fromWire("bruteforce"))
+        assertNull(KeyOrigin.fromWire(null))
     }
 }

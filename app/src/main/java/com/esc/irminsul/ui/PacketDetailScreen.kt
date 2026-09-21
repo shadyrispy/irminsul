@@ -36,6 +36,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.esc.irminsul.MainViewModel
 import com.esc.irminsul.R
@@ -58,6 +59,18 @@ fun PacketDetailScreen(
     val record = remember(packetId, commandIndex) {
         viewModel.packets.value.firstOrNull {
             it.packetId == packetId && it.commandIndex == commandIndex
+        }
+    }
+    // Named here because a batched command on its own looks like unexplained
+    // traffic; the envelope it rode in on is the rest of the answer.
+    val parent = remember(record) {
+        val parentIndex = record?.parentIndex
+        if (parentIndex == null) {
+            null
+        } else {
+            viewModel.packets.value.firstOrNull {
+                it.packetId == packetId && it.commandIndex == parentIndex
+            }
         }
     }
     var rootNode by remember { mutableStateOf<ProtoNode?>(null) }
@@ -125,6 +138,16 @@ fun PacketDetailScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(start = 8.dp)
                             )
+                            parent?.let { carrier ->
+                                Text(
+                                    text = "↳ inside ${carrier.name}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(start = 8.dp)
+                                )
+                            }
                         }
                     }
                 }

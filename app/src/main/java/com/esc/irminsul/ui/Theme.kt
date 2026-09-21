@@ -1,4 +1,4 @@
-package com.esc.irminsul
+package com.esc.irminsul.ui
 
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme

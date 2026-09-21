@@ -34,9 +34,9 @@ data class ExportSettings(
     var fakeInitialize4thLine: Boolean = false
 )
 
-class DataStore : DataStatusSink {
+class PlayerDataStore : DataStatusSink {
     companion object {
-        private const val TAG = "DataStore"
+        private const val TAG = "PlayerDataStore"
         const val FORMAT_UIAF = 0
         const val FORMAT_SEELIE = 1
         const val FORMAT_CSV = 2
@@ -53,7 +53,7 @@ class DataStore : DataStatusSink {
     }
 
     fun clear() {
-        Log.i(TAG, "DataStore cleared")
+        Log.i(TAG, "Player data store cleared")
         _dataStatus.value = DataStatus()
     }
 

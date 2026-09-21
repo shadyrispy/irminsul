@@ -5,6 +5,7 @@ import com.esc.irminsul.capture.CaptureResult
 import com.esc.irminsul.capture.CaptureSource
 import com.esc.irminsul.capture.Completion
 import com.esc.irminsul.capture.IrminsulCapture
+import com.esc.irminsul.capture.KeyOrigin
 import com.esc.irminsul.capture.PacketRecord
 import com.esc.irminsul.capture.PermissionKind
 import com.esc.irminsul.capture.PermissionSnapshot
@@ -91,7 +92,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
-    private val dataStore: DataStore = DataStore()
+    private val playerDataStore: PlayerDataStore = PlayerDataStore()
     private val localStorage: LocalStorage = LocalStorage(context)
     val packets: StateFlow<List<PacketRecord>> = IrminsulCapture.packets
 
@@ -114,8 +115,8 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private fun startCaptureFrom(source: CaptureSource) {
         reloginAskedThisSession = false
-        dataStore.clear()
-        IrminsulCapture.start(context, source, dataStore, captureConfig())
+        playerDataStore.clear()
+        IrminsulCapture.start(context, source, playerDataStore, captureConfig())
     }
 
     fun dismissReloginDialog() {
@@ -133,6 +134,22 @@ class MainViewModel(private val context: Context) : ViewModel() {
                     "[SUCCESS] All data collected! Artifacts: ${c.artifactsCount}, " +
                         "Weapons: ${c.weaponsCount}, Materials: ${c.materialsCount}, " +
                         "Characters: ${c.charactersCount}, Achievements: ${c.achievementsCount}"
+                )
+            }
+        }
+
+        // Which key is opening the stream is the difference between "the game is
+        // not playing" and "we joined too late", and it changes mid-session when
+        // the client re-logs in — so report every transition, not just the first.
+        viewModelScope.launch {
+            IrminsulCapture.keyOrigin.collect { origin ->
+                addLog(
+                    when (origin) {
+                        null -> "No session key yet — nothing past the handshake will decrypt"
+                        KeyOrigin.Dispatch -> "Decrypting with the dispatch key only: waiting for a login"
+                        KeyOrigin.KnownBody -> "Session opened from a command body saved by an earlier run"
+                        KeyOrigin.TimeSearch -> "Session key derived from this handshake"
+                    }
                 )
             }
         }
@@ -182,7 +199,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
         }
 
         viewModelScope.launch {
-            dataStore.dataStatus.collect { status ->
+            playerDataStore.dataStatus.collect { status ->
                 _uiState.value = _uiState.value.copy(
                     itemsLoaded = status.itemsLoaded,
                     charactersLoaded = status.charactersLoaded,
@@ -296,7 +313,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     }
 
     fun resetData() {
-        dataStore.clear()
+        playerDataStore.clear()
         logList.clear()
         _uiState.value = UiState()
         // The sniffer holds the only copy of the decoded state, so a reset is
@@ -475,7 +492,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     fun copyGoodToClipboard() {
         try {
             val settings = buildExportSettings()
-            val (json, stats) = dataStore.exportGood(settings)
+            val (json, stats) = playerDataStore.exportGood(settings)
             copyToClipboard(json)
             val parts = mutableListOf<String>()
             if (settings.includeCharacters) parts.add("${stats.charactersCount}${context.getString(R.string.characters)}")
@@ -494,7 +511,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     fun downloadGood(): String {
         return try {
             val settings = buildExportSettings()
-            val (json, stats) = dataStore.exportGood(settings)
+            val (json, stats) = playerDataStore.exportGood(settings)
             val path = saveExportFile(json, "irminsul_good_")
             val parts = mutableListOf<String>()
             if (settings.includeCharacters) parts.add("${stats.charactersCount}${context.getString(R.string.characters)}")
@@ -517,7 +534,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     fun copyAchievements() {
         try {
             val formatCode = achievementFormatToCode(_uiState.value.achievementExportFormat)
-            val json = dataStore.exportAchievements(formatCode)
+            val json = playerDataStore.exportAchievements(formatCode)
             copyToClipboard(json)
             showToast(context.getString(R.string.toast_copied_achievements, _uiState.value.achievementsCount))
             addLog("${_uiState.value.achievementExportFormat} copied to clipboard!")
@@ -531,7 +548,7 @@ class MainViewModel(private val context: Context) : ViewModel() {
     fun openInCocogoat() {
         viewModelScope.launch {
             try {
-                val json = dataStore.exportAchievements(DataStore.FORMAT_UIAF)
+                val json = playerDataStore.exportAchievements(PlayerDataStore.FORMAT_UIAF)
                 val cocogoatUrl = postToMemoApi(json)
                 try {
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(cocogoatUrl)).apply {
@@ -556,8 +573,8 @@ class MainViewModel(private val context: Context) : ViewModel() {
     fun downloadAchievements() {
         try {
             val formatCode = achievementFormatToCode(_uiState.value.achievementExportFormat)
-            val content = dataStore.exportAchievements(formatCode)
-            val ext = if (formatCode == DataStore.FORMAT_CSV) EXPORT_FILE_EXTENSION_CSV else EXPORT_FILE_EXTENSION_JSON
+            val content = playerDataStore.exportAchievements(formatCode)
+            val ext = if (formatCode == PlayerDataStore.FORMAT_CSV) EXPORT_FILE_EXTENSION_CSV else EXPORT_FILE_EXTENSION_JSON
             val path = saveExportFile(content, EXPORT_ACHIEVEMENT_PREFIX + _uiState.value.achievementExportFormat.lowercase() + "_", ext)
             showToast(context.getString(R.string.toast_saved_achievements, path, _uiState.value.achievementsCount))
             addLog("${_uiState.value.achievementExportFormat} saved!")
@@ -572,10 +589,10 @@ class MainViewModel(private val context: Context) : ViewModel() {
 
     private fun achievementFormatToCode(format: String): Int {
         return when (format) {
-            EXPORT_FORMAT_UIAF -> DataStore.FORMAT_UIAF
-            EXPORT_FORMAT_SEELIE -> DataStore.FORMAT_SEELIE
-            EXPORT_FORMAT_CSV -> DataStore.FORMAT_CSV
-            else -> DataStore.FORMAT_UIAF
+            EXPORT_FORMAT_UIAF -> PlayerDataStore.FORMAT_UIAF
+            EXPORT_FORMAT_SEELIE -> PlayerDataStore.FORMAT_SEELIE
+            EXPORT_FORMAT_CSV -> PlayerDataStore.FORMAT_CSV
+            else -> PlayerDataStore.FORMAT_UIAF
         }
     }
 

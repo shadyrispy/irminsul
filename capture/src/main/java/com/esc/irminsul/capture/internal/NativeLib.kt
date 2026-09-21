@@ -162,6 +162,54 @@ internal object NativeLib {
         }
     }
 
+    /**
+     * How the key decrypting the current session was obtained — "dispatch",
+     * "known_body", "time_search" — or null when no session key exists yet.
+     * Cheap enough to read after every packet, which is the only way to notice a
+     * client re-logging in and taking the key with it.
+     */
+    fun keyOrigin(): String? {
+        ensureLibraryLoaded()
+        return if (libraryLoaded) {
+            nativeKeyOrigin()
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Copies the session's known-body samples into [destDir] and returns the path
+     * of the copy, or null when there is nothing to hand over. The app's own files
+     * dir is unreachable on devices that refuse `run-as`, and these samples decide
+     * whether a capture that missed a handshake is readable at all.
+     */
+    fun exportKnownBodies(destDir: String): String? {
+        ensureLibraryLoaded()
+        return if (libraryLoaded) {
+            nativeExportKnownBodies(destDir)
+        } else {
+            null
+        }
+    }
+
+    /** Opens a pcap for replay; -1 when it is not a readable pcap (see `logs`). */
+    fun pcapOpen(path: String): Long {
+        ensureLibraryLoaded()
+        return if (libraryLoaded) nativePcapOpen(path) else -1L
+    }
+
+    /** The next frame, or null at the end. [timestampOut] receives the file's own ms. */
+    fun pcapNext(handle: Long, timestampOut: LongArray): ByteArray? {
+        ensureLibraryLoaded()
+        return if (libraryLoaded) nativePcapNext(handle, timestampOut) else null
+    }
+
+    fun pcapClose(handle: Long) {
+        if (libraryLoaded) {
+            nativePcapClose(handle)
+        }
+    }
+
     fun destroySniffer() {
         if (libraryLoaded) {
             nativeDestroySniffer()
@@ -184,10 +232,25 @@ internal object NativeLib {
     private external fun nativeCommandBody(packetId: Long, commandIndex: Int): String?
 
     @JvmStatic
+    private external fun nativeKeyOrigin(): String?
+
+    @JvmStatic
     private external fun nativeExportGood(settingsJson: String?): String?
 
     @JvmStatic
     private external fun nativeExportAchievements(formatCode: Int): String?
+
+    @JvmStatic
+    private external fun nativeExportKnownBodies(destDir: String): String?
+
+    @JvmStatic
+    private external fun nativePcapOpen(path: String): Long
+
+    @JvmStatic
+    private external fun nativePcapNext(handle: Long, timestampOut: LongArray): ByteArray?
+
+    @JvmStatic
+    private external fun nativePcapClose(handle: Long)
 
     @JvmStatic
     private external fun nativeDestroySniffer()

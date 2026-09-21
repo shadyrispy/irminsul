@@ -1,10 +1,19 @@
-//! The status payload a front end reads per packet.
+//! The JSON names a front end reads, and the single fixture both halves test
+//! against.
 //!
-//! These JSON keys are a contract with `StatusDecoder` in the Kotlin half of the
-//! capture module and with whatever a viewer draws.
-//! `capture/testdata/summary_status.json` is the single fixture both halves test
-//! against, so a rename on either side fails a test instead of silently reading
-//! back as zero.
+//! Three things live here because they all cross the same wire and are pinned by
+//! the same `capture/testdata/summary_status.json`:
+//!
+//! - [`status_json`] — the per-packet payload (counts, flags, `commands[]`);
+//! - [`command_summary`] — one entry of that `commands` array, with the
+//!   `parent_index` that flattening established;
+//! - [`key_origin_name`] — the wire names for `Session::key_origin`, which is
+//!   session state queried after each packet rather than a per-packet field.
+//!
+//! A rename on either the Rust or the Kotlin side fails a test instead of
+//! silently reading back as zero.
+
+use auto_artifactarium::{GameCommand, KeyOrigin};
 
 pub struct StatusPayload<'a> {
     pub packet_id: u64,
@@ -32,6 +41,33 @@ pub fn status_json(payload: &StatusPayload) -> serde_json::Value {
         "achievement_count": payload.achievement_count,
         "commands": payload.commands,
     })
+}
+
+/// One entry of the payload's `commands` array: the command's own summary, plus
+/// its flattened position for the batch envelope it arrived inside (`None` for a
+/// command that came on its own). `Session::feed` establishes that order.
+pub fn command_summary(command: &GameCommand, parent: Option<usize>) -> serde_json::Value {
+    let mut summary = command.summary_json();
+    summary["parent_index"] = match parent {
+        Some(index) => serde_json::json!(index),
+        None => serde_json::Value::Null,
+    };
+    summary
+}
+
+/// The wire name of a [`KeyOrigin`], lower-snake_case like `direction`'s
+/// "sent"/"received".
+///
+/// Key origin is session state rather than a per-packet field (see
+/// [`Session::key_origin`](crate::Session::key_origin)), but its names belong to
+/// this contract all the same: Kotlin's `KeyOrigin.fromWire` lists the three of
+/// them independently, so a rename on either side fails a test.
+pub fn key_origin_name(origin: KeyOrigin) -> &'static str {
+    match origin {
+        KeyOrigin::Dispatch => "dispatch",
+        KeyOrigin::KnownBody => "known_body",
+        KeyOrigin::TimeSearch => "time_search",
+    }
 }
 
 #[cfg(test)]
@@ -99,7 +135,7 @@ mod contract_tests {
             direction: PacketDirection::Received,
         };
         assert_eq!(
-            sorted(keys(&command.summary_json())),
+            sorted(keys(&command_summary(&command, None))),
             sorted(keys(&fixture()["commands"][0])),
             "command summary keys drifted from the fixture"
         );
@@ -126,5 +162,35 @@ mod contract_tests {
         assert!(command["size"].is_number());
         assert!(command["brief_keys"].is_array());
         assert_eq!(command["direction"], "received");
+        assert!(
+            command["parent_index"].is_null(),
+            "a command that came on its own has a null parent"
+        );
+        assert_eq!(
+            fixture["commands"][4]["parent_index"], 3,
+            "the fixture's nested example must point at the envelope that carries it"
+        );
+    }
+
+    #[test]
+    fn a_nested_summary_carries_the_index_of_its_envelope() {
+        let command = GameCommand {
+            command_id: 0,
+            header_len: 10,
+            data_len: 0,
+            ext_header: vec![],
+            proto_data: vec![],
+            direction: PacketDirection::Received,
+        };
+        assert_eq!(command_summary(&command, Some(2))["parent_index"], 2);
+        assert!(command_summary(&command, None)["parent_index"].is_null());
+    }
+
+    /// The same three strings `KeyOrigin.fromWire` lists in Kotlin.
+    #[test]
+    fn key_origins_have_the_names_the_decoder_reads() {
+        assert_eq!(key_origin_name(KeyOrigin::Dispatch), "dispatch");
+        assert_eq!(key_origin_name(KeyOrigin::KnownBody), "known_body");
+        assert_eq!(key_origin_name(KeyOrigin::TimeSearch), "time_search");
     }
 }

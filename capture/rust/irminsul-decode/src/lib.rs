@@ -7,8 +7,9 @@
 //! a parse or key fix lands on every front end at once instead of in one of them.
 //!
 //! Logging goes through `tracing` and never at a front end directly. The Android
-//! shim installs a subscriber that routes INFO and above into logcat; a viewer
-//! prints to the terminal.
+//! shim installs a subscriber that routes INFO and above into logcat; the desktop
+//! viewer keeps the libraries' logs off its console entirely and surfaces what
+//! matters as stream events instead.
 
 pub mod achievements;
 pub mod uiaf;
@@ -20,7 +21,8 @@ mod source;
 mod status;
 
 pub use achievements::AchievementFormat;
+pub use auto_artifactarium::KeyOrigin;
 pub use irminsul::player_data::{ExportSettings, PlayerData};
-pub use session::{PacketOutcome, Session};
-pub use source::{PcapFrames, prepare_frame};
-pub use status::{StatusPayload, status_json};
+pub use session::{PacketOutcome, Session, dispatch_keys};
+pub use source::{AnyFrames, PcapFrames, prepare_frame};
+pub use status::{StatusPayload, command_summary, key_origin_name, status_json};

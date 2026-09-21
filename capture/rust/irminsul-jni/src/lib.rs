@@ -11,12 +11,14 @@
 //! `src/main/jniLibs`.
 
 use std::sync::Once;
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicI64, Ordering};
 
-use irminsul_decode::{AchievementFormat, ExportSettings, Session};
+use irminsul_decode::{AchievementFormat, ExportSettings, PcapFrames, Session, key_origin_name};
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JClass, JString};
-use jni::sys::{jint, jlong, jstring};
+use jni::objects::{JByteArray, JClass, JLongArray, JString};
+use jni::sys::{jbyteArray, jint, jlong, jlongArray, jstring};
 
 // ---------------------------------------------------------------------------
 // Global state
@@ -25,6 +27,13 @@ use jni::sys::{jint, jlong, jstring};
 /// One session at a time, matching the one VPN tunnel the module runs.
 static GLOBAL_STATE: Mutex<Option<Session>> = Mutex::new(None);
 static JAVA_VM: Mutex<Option<jni::JavaVM>> = Mutex::new(None);
+
+/// pcap files opened for replay, keyed by the handle Kotlin was given. The file
+/// format is parsed in exactly one place — the decode core's reader — so a
+/// Kotlin-side and a Rust-side understanding of pcap cannot drift apart.
+static PCAP_READERS: LazyLock<Mutex<HashMap<i64, PcapFrames>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static PCAP_NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
 
 // Lock helpers that never panic at the JNI boundary. A poisoned mutex (a panic
 // occurred while holding it elsewhere) or a contended lock must not crash the
@@ -342,6 +351,182 @@ pub extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeCo
             Err(_) => std::ptr::null_mut(),
         },
         None => std::ptr::null_mut(),
+    }
+}
+
+/// How the key currently decrypting the session was obtained: "dispatch",
+/// "known_body" or "time_search". Null when no session key exists yet — which
+/// includes a client that just re-logged in, so a caller learns about going blind
+/// only if it asks after every packet.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeKeyOrigin(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let state_guard = match lock_global_state() {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let origin = state_guard.as_ref().and_then(|session| session.key_origin());
+    drop(state_guard);
+
+    match origin.map(key_origin_name) {
+        Some(name) => match env.new_string(name) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Copies this session's known-body samples into `dest_dir` and returns where the
+/// copy landed, or null when there are none yet or the copy failed (logged).
+///
+/// A host that cannot read the app's own files dir — `run-as` is refused on some
+/// images — can still pull the external storage directory, and these bytes decide
+/// whether a blind capture is readable later.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativeExportKnownBodies(
+    mut env: JNIEnv,
+    _class: JClass,
+    dest_dir: JString,
+) -> jstring {
+    let dir = match env.get_string(&dest_dir) {
+        Ok(dir) => std::path::PathBuf::from(String::from(dir)),
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let exported = {
+        let state = match lock_global_state() {
+            Some(state) => state,
+            None => return std::ptr::null_mut(),
+        };
+        let Some(session) = state.as_ref() else {
+            return std::ptr::null_mut();
+        };
+        session.export_known_bodies(&dir)
+    };
+
+    let path = match exported {
+        Ok(Some(path)) => path,
+        Ok(None) => return std::ptr::null_mut(),
+        Err(e) => {
+            log_to_android("ERROR", &format!("Failed to export known bodies: {}", e));
+            return std::ptr::null_mut();
+        }
+    };
+
+    match env.new_string(path.display().to_string()) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Opens `path` for replay and hands back the handle `nativePcapNext` reads under.
+/// Returns -1 when the file is not a readable pcap; the reason is on the log
+/// stream the host already watches, so it is not repeated through the return value.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativePcapOpen(
+    mut env: JNIEnv,
+    _class: JClass,
+    path: JString,
+) -> jlong {
+    let path = match env.get_string(&path) {
+        Ok(path) => std::path::PathBuf::from(String::from(path)),
+        Err(_) => return -1,
+    };
+    let display = path.display().to_string();
+
+    match PcapFrames::open(&path) {
+        Ok(frames) => {
+            let handle = PCAP_NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+            if let Some(mut readers) = PCAP_READERS.lock().ok() {
+                readers.insert(handle, frames);
+            }
+            log_to_android("INFO", &format!("pcap replay opened {}", display));
+            handle
+        }
+        Err(e) => {
+            log_to_android("ERROR", &format!("Cannot open {}: {}", display, e));
+            -1
+        }
+    }
+}
+
+/// The next frame, or null at the end of the file (or after a read error, which
+/// is logged). `timestamp_out[0]` receives the file's own timestamp for the frame
+/// in milliseconds, so a replay keeps the capture's clock instead of the wall
+/// clock it is replayed on.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativePcapNext(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    timestamp_out: jlongArray,
+) -> jbyteArray {
+    /// What one pull from the reader produced. Naming "the file ended" separately
+    /// matters: without it a completed replay and a bad handle look identical, and
+    /// the message written for the wrong one sends whoever is debugging somewhere
+    /// they do not need to go.
+    enum Pulled {
+        Frame(Vec<u8>, u64),
+        Ended,
+        Stopped(String),
+        UnknownHandle,
+    }
+
+    // Take the lock, pull one frame, drop it: no upcall into Java happens while
+    // the reader map is held.
+    let pulled = PCAP_READERS.lock().ok().map_or(Pulled::UnknownHandle, |mut readers| {
+        let Some(reader) = readers.get_mut(&handle) else {
+            return Pulled::UnknownHandle;
+        };
+        match reader.next() {
+            None => Pulled::Ended,
+            Some(Ok((bytes, timestamp_ms))) => Pulled::Frame(bytes, timestamp_ms),
+            Some(Err(e)) => Pulled::Stopped(e.to_string()),
+        }
+    });
+
+    let (bytes, timestamp_ms) = match pulled {
+        Pulled::Frame(bytes, timestamp_ms) => (bytes, timestamp_ms),
+        Pulled::Ended => return std::ptr::null_mut(),
+        // A short read ends the replay rather than failing it: the file gave what
+        // it had, and the reason belongs on the log stream the host watches.
+        Pulled::Stopped(reason) => {
+            log_to_android("WARN", &format!("pcap replay stopped: {}", reason));
+            return std::ptr::null_mut();
+        }
+        Pulled::UnknownHandle => {
+            log_to_android("ERROR", &format!("unknown pcap handle {}", handle));
+            return std::ptr::null_mut();
+        }
+    };
+
+    let out = unsafe { JLongArray::from_raw(timestamp_out) };
+    if let Err(e) = env.set_long_array_region(&out, 0, &[timestamp_ms as jlong]) {
+        log_to_android("ERROR", &format!("cannot report pcap timestamp: {}", e));
+        return std::ptr::null_mut();
+    }
+    match env.byte_array_from_slice(&bytes) {
+        Ok(array) => array.into_raw(),
+        Err(e) => {
+            log_to_android("ERROR", &format!("cannot hand over pcap frame: {}", e));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Ends a replay. Kotlin must call this even when the loop was interrupted, or
+/// the file handle stays parked in the map for the life of the process.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativePcapClose(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if let Ok(mut readers) = PCAP_READERS.lock() {
+        readers.remove(&handle);
     }
 }
 

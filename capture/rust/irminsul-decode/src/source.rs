@@ -1,8 +1,8 @@
 //! Where frames come from, and the shape they need before the sniffer sees them.
 
 use std::fs::File;
-use std::io::{self, BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::io::{self, BufRead, BufReader, Read};
+use std::path::Path;
 
 /// PCAPdroid appends a 32-byte trailer to each packet it reports.
 const PCAPDROID_TRAILER_SIZE: usize = 32;
@@ -51,26 +51,58 @@ pub fn prepare_frame(data: &[u8]) -> Option<Vec<u8>> {
     Some(frame)
 }
 
-/// A classic pcap file replayed one prepared frame at a time.
+/// A classic pcap byte stream replayed one record at a time.
 ///
-/// This is a hand-rolled reader rather than `libpcap` on purpose: replaying a file
-/// is how this stack gets debugged, and it should need no system library, no admin
-/// rights and no capture device.
+/// This is a hand-rolled reader rather than `libpcap` on purpose: replaying a
+/// capture is how this stack gets debugged, and it should need no system library,
+/// no admin rights and no capture device.
+///
+/// It reads anything buffered rather than only a file, because a capture reaches
+/// this code from several kinds of place: a dumped file, a pipe from another
+/// process, the standard input. Only the header needs reading ahead of the rest,
+/// so a live stream works exactly as well as a file as long as whoever writes it
+/// flushes per record (`tcpdump -U`).
+///
+/// Frames are handed over as the stream holds them, without [`prepare_frame`]:
+/// [`Session::feed`](crate::Session::feed) normalises them, and wrapping here too
+/// would prepend the link layer twice.
 #[derive(Debug)]
-pub struct PcapFrames {
-    file: BufReader<File>,
-    path: PathBuf,
-    /// `false` when the file's magic says its integers are big-endian.
+pub struct PcapFrames<R: BufRead = BufReader<File>> {
+    reader: R,
+    /// Where the bytes come from, spelled out in every error this reader raises.
+    source: String,
+    /// `false` when the stream's magic says its integers are big-endian.
     little_endian: bool,
     linktype: u32,
     done: bool,
 }
 
-impl PcapFrames {
+/// A reader whose source is not a file — a pipe, standard input, a child process.
+pub type AnyFrames = PcapFrames<Box<dyn BufRead + Send>>;
+
+impl PcapFrames<BufReader<File>> {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        let mut file = BufReader::new(File::open(&path)?);
-        let header = Self::read_array(&mut file, 24)?;
+        let path = path.as_ref();
+        let source = path.display().to_string();
+        let file = File::open(path)?;
+        Self::from_read(BufReader::new(file), source)
+    }
+}
+
+impl<R: BufRead> PcapFrames<R> {
+    /// Read from a stream already open, calling the thing `source` in errors.
+    pub fn from_read(mut reader: R, source: impl Into<String>) -> io::Result<Self> {
+        let source = source.into();
+        let header = read_array(&mut reader, 24, &source).map_err(|e| {
+            if e.kind() == io::ErrorKind::UnexpectedEof {
+                io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("{source} is too short to hold a pcap header"),
+                )
+            } else {
+                e
+            }
+        })?;
 
         let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
         let little_endian = match magic {
@@ -79,7 +111,7 @@ impl PcapFrames {
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("{} is not a classic pcap file (magic {other:#x})", path.display()),
+                    format!("{source} is not a classic pcap file (magic {other:#x})"),
                 ));
             }
         };
@@ -91,24 +123,40 @@ impl PcapFrames {
         };
 
         Ok(Self {
-            file,
-            path,
+            reader,
+            source,
             little_endian,
             linktype,
             done: false,
         })
     }
 
-    /// The link-layer type the file's records start at. `101` is raw IP, which
+    /// Forget the reader's type, keeping only the guarantee the replay thread
+    /// needs: that it can be moved to another thread and read from there.
+    pub fn boxed(self) -> AnyFrames
+    where
+        R: Send + 'static,
+    {
+        let Self {
+            reader,
+            source,
+            little_endian,
+            linktype,
+            done,
+        } = self;
+        AnyFrames {
+            reader: Box::new(reader),
+            source,
+            little_endian,
+            linktype,
+            done,
+        }
+    }
+
+    /// The link-layer type the stream's records start at. `101` is raw IP, which
     /// [`prepare_frame`] wraps; `1` is Ethernet, which it passes through.
     pub fn linktype(&self) -> u32 {
         self.linktype
-    }
-
-    fn read_array(file: &mut BufReader<File>, len: usize) -> io::Result<Vec<u8>> {
-        let mut buf = vec![0u8; len];
-        file.read_exact(&mut buf)?;
-        Ok(buf)
     }
 
     fn u32_at(&self, bytes: &[u8]) -> u32 {
@@ -121,16 +169,40 @@ impl PcapFrames {
     }
 }
 
-impl Iterator for PcapFrames {
-    /// A frame plus the file's own timestamp for it, in milliseconds.
+impl AnyFrames {
+    /// A live stream: buffered, sendable, and boxed so a caller can hold several
+    /// kinds of source in one variable.
+    pub fn from_stream(reader: impl BufRead + Send + 'static, source: impl Into<String>) -> io::Result<Self> {
+        PcapFrames::from_read(reader, source).map(PcapFrames::boxed)
+    }
+}
+
+fn read_array(reader: &mut impl Read, len: usize, source: &str) -> io::Result<Vec<u8>> {
+    let mut buf = vec![0u8; len];
+    reader.read_exact(&mut buf).map_err(|e| match e.kind() {
+        // "Ran out of bytes" needs the reader's own words to mean anything, so
+        // this keeps the kind and lets the caller name the thing that ended.
+        io::ErrorKind::UnexpectedEof => io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("{source} ended early"),
+        ),
+        _ => e,
+    })?;
+    Ok(buf)
+}
+
+impl<R: BufRead> Iterator for PcapFrames<R> {
+    /// A frame plus the stream's own timestamp for it, in milliseconds.
     type Item = io::Result<(Vec<u8>, u64)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
             return None;
         }
-        let header = match Self::read_array(&mut self.file, 16) {
+        let header = match read_array(&mut self.reader, 16, &self.source) {
             Ok(header) => header,
+            // A clean end is a short read of the record header: nothing left, not
+            // something broken.
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 self.done = true;
                 return None;
@@ -141,19 +213,16 @@ impl Iterator for PcapFrames {
         let fraction = self.u32_at(&header[4..8]);
         let captured = self.u32_at(&header[8..12]);
 
-        let mut record = match Self::read_array(&mut self.file, captured as usize) {
+        let mut record = match read_array(&mut self.reader, captured as usize, &self.source) {
             Ok(record) => record,
-            Err(e) => {
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 self.done = true;
                 return Some(Err(io::Error::new(
                     e.kind(),
-                    format!(
-                        "{} ends mid-record: wanted {captured} bytes, {}",
-                        self.path.display(),
-                        e
-                    ),
+                    format!("{} ends mid-record: wanted {captured} bytes", self.source),
                 )));
             }
+            Err(e) => return Some(Err(e)),
         };
 
         // Raw and Ethernet capture lengths are all this pipeline distinguishes;
@@ -162,9 +231,6 @@ impl Iterator for PcapFrames {
             record.resize(captured as usize, 0);
         }
 
-        // Records are handed over as read: [`Session::feed`](crate::Session::feed)
-        // normalises frames from either source, so prepending the link layer here
-        // would make it happen twice for a live tunnel's worth of difference.
         Some(Ok((record, seconds as u64 * 1000 + fraction as u64 / 1000)))
     }
 }
@@ -172,28 +238,35 @@ impl Iterator for PcapFrames {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{Cursor, Write};
+    use std::path::PathBuf;
 
-    fn write_pcap(path: &Path, records: &[&[u8]]) {
-        let mut file = std::fs::File::create(path).unwrap();
-        file.write_all(
-            &[
-                0xd4, 0xc3, 0xb2, 0xa1, // little-endian magic
-                0x02, 0x00, 0x04, 0x00, // version 2.4
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // thiszone, sigts
-                0xff, 0xff, 0x00, 0x00, // snaplen
-                101, 0x00, 0x00, 0x00, // linktype: raw IP
-            ],
-        )
-            .unwrap();
+    /// A little-endian raw-IP pcap holding `records`, each stamped 0x11.000022.
+    fn pcap_bytes(records: &[&[u8]]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&[
+            0xd4, 0xc3, 0xb2, 0xa1, // little-endian magic
+            0x02, 0x00, 0x04, 0x00, // version 2.4
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // thiszone, sigts
+            0xff, 0xff, 0x00, 0x00, // snaplen
+            101, 0x00, 0x00, 0x00, // linktype: raw IP
+        ]);
         for record in records {
             let len = (record.len() as u32).to_le_bytes();
-            file.write_all(&[0x11, 0x00, 0x00, 0x00]).unwrap(); // ts_sec
-            file.write_all(&[0x22, 0x00, 0x00, 0x00]).unwrap(); // ts_usec
-            file.write_all(&len).unwrap();
-            file.write_all(&len).unwrap();
-            file.write_all(record).unwrap();
+            out.extend_from_slice(&[0x11, 0x00, 0x00, 0x00]); // ts_sec
+            out.extend_from_slice(&[0x22, 0x00, 0x00, 0x00]); // ts_usec
+            out.extend_from_slice(&len);
+            out.extend_from_slice(&len);
+            out.extend_from_slice(record);
         }
+        out
+    }
+
+    fn write_pcap(path: &Path, records: &[&[u8]]) {
+        std::fs::File::create(path)
+            .unwrap()
+            .write_all(&pcap_bytes(records))
+            .unwrap();
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -272,16 +345,9 @@ mod tests {
     fn a_file_ending_mid_record_reports_where_it_stopped() {
         let dir = scratch("pcap_truncated");
         let path = dir.join("cut.pcap");
-        let mut file = std::fs::File::create(&path).unwrap();
-        let header = [
-            0xd4, 0xc3, 0xb2, 0xa1, 0x02, 0x00, 0x04, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff,
-            0x00, 0x00, 101, 0, 0, 0,
-        ];
-        file.write_all(&header).unwrap();
-        file.write_all(&[0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
-        file.write_all(&(500u32.to_le_bytes())).unwrap();
-        file.write_all(&(500u32.to_le_bytes())).unwrap();
-        file.write_all(&[0x45; 3]).unwrap();
+        let mut bytes = pcap_bytes(&[&[0x45; 500]]);
+        bytes.truncate(bytes.len() - 200);
+        std::fs::write(&path, bytes).unwrap();
 
         let mut frames = PcapFrames::open(&path).unwrap();
         let error = frames.next().unwrap().unwrap_err();
@@ -290,5 +356,50 @@ mod tests {
             "unexpected message: {error}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stream_reads_exactly_like_a_file() {
+        let bytes = pcap_bytes(&[&[0x45, 0xaa, 0xbb], &[0x45, 0xcc, 0xdd]]);
+        let mut frames = PcapFrames::from_read(Cursor::new(bytes), "memory").unwrap();
+
+        assert_eq!(frames.linktype(), 101);
+        let (first, ts) = frames.next().unwrap().unwrap();
+        assert_eq!(first, &[0x45, 0xaa, 0xbb]);
+        assert_eq!(ts, 0x11 * 1000 + 0x22 / 1000);
+        assert_eq!(frames.next().unwrap().unwrap().0, &[0x45, 0xcc, 0xdd]);
+        assert!(frames.next().is_none());
+    }
+
+    #[test]
+    fn a_stream_that_is_not_a_file_is_still_named_in_errors() {
+        let error = PcapFrames::from_read(Cursor::new(b"pipe noise, definitely not pcap".to_vec()), "stdin")
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("stdin"),
+            "the message should name the source: {error}"
+        );
+
+        let mut bytes = pcap_bytes(&[&[0x45; 40]]);
+        bytes.truncate(bytes.len() - 10);
+        let mut frames = PcapFrames::from_read(Cursor::new(bytes), "tcpdump -U -w -").unwrap();
+        let error = frames.next().unwrap().unwrap_err();
+        assert!(
+            error.to_string().contains("tcpdump -U -w - ends mid-record"),
+            "unexpected message: {error}"
+        );
+    }
+
+    #[test]
+    fn a_stream_can_be_boxed_and_moved_to_another_thread() {
+        fn reads_on_a_thread(reader: AnyFrames) -> Vec<Vec<u8>> {
+            std::thread::spawn(move || reader.map_while(Result::ok).map(|(frame, _)| frame).collect())
+                .join()
+                .unwrap()
+        }
+
+        let frames = AnyFrames::from_stream(Cursor::new(pcap_bytes(&[&[0x45, 0x01], &[0x45, 0x02]])), "pipe")
+            .unwrap();
+        assert_eq!(reads_on_a_thread(frames), vec![vec![0x45, 0x01], vec![0x45, 0x02]]);
     }
 }

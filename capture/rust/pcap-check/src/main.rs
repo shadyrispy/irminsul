@@ -1,91 +1,34 @@
-//! Offline verification tool: replay a pcap exported by the app through the
-//! same pipeline as `nativeProcessPacket` (PCAPdroid trailer strip → fake
-//! Ethernet header → `GameSniffer`) and report command parse health.
+//! Offline verification tool: replay a pcap exported by the app through the same
+//! pipeline the app runs, and report what came out.
 //!
-//! Usage: `cargo run --release -- <capture.pcap> [dump_cmd_id]`
+//! Usage:
+//!   `cargo run --release -- <capture.pcap> [dump_cmd_id]`
+//!     Per-command decode health: names, sizes, parse errors, envelope contents.
+//!   `cargo run --release -- --status [--samples DIR] <capture.pcap>`
+//!     One status JSON per packet, exactly as a front end receives it.
+//!
+//! The first mode drives [`GameSniffer`] directly so its counters stay comparable
+//! across refactors; the second drives [`Session`], so what it prints is the
+//! payload contract under real traffic.
 
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::path::PathBuf;
+use std::collections::HashMap;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use auto_artifactarium::{
-    matches_achievement_packet, matches_avatar_packet, matches_item_packet, GamePacket,
+    matches_achievement_packet, matches_avatar_packet, matches_item_packet, GameCommand, GamePacket,
     GameSniffer, PacketDirection,
 };
-use base64::Engine;
+use irminsul_decode::{PcapFrames, Session, dispatch_keys, key_origin_name, prepare_frame};
 use serde_json::Value;
+use std::path::Path;
 
-fn load_keys() -> Result<HashMap<u16, Vec<u8>>> {
-    let keys_json: HashMap<u16, String> = serde_json::from_slice(include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../irminsul-core/keys/gi.json"
-    ))).context("parse keys/gi.json")?;
-    keys_json
-        .into_iter()
-        .map(|(k, v)| {
-            let decoded = base64::engine::general_purpose::STANDARD
-                .decode(&v)
-                .map_err(|e| anyhow::anyhow!("decode key {k}: {e}"))?;
-            Ok((k, decoded))
-        })
-        .collect()
-}
-
-const TRAILER_SIZE: usize = 32;
-
-/// Identical to irminsul-jni's `extract_and_prepare_packet`.
-fn prepare(data: &[u8]) -> Option<Vec<u8>> {
-    if data.len() < TRAILER_SIZE {
-        return None;
-    }
-    let mut packet_data = data;
-    let trailer = &packet_data[packet_data.len() - TRAILER_SIZE..];
-    if trailer[0] == 0x01 && trailer[1] == 0x00 {
-        packet_data = &packet_data[..packet_data.len() - TRAILER_SIZE];
-    }
-    if packet_data.is_empty() {
-        return None;
-    }
-    let first_byte = packet_data[0];
-    let ether_type: [u8; 2] = if (first_byte >> 4) == 0x04 {
-        [0x08, 0x00]
-    } else if (first_byte & 0xF0) == 0x60 {
-        [0x86, 0xDD]
-    } else {
-        return Some(packet_data.to_vec());
-    };
-    let mut frame = Vec::with_capacity(14 + packet_data.len());
-    frame.extend_from_slice(&[0x00; 12]);
-    frame.extend_from_slice(&ether_type);
-    frame.extend_from_slice(packet_data);
-    Some(frame)
-}
-
-struct PcapRecords<'a> {
-    data: &'a [u8],
-    little_endian: bool,
-    offset: usize,
-}
-
-impl<'a> Iterator for PcapRecords<'a> {
-    type Item = &'a [u8];
-    fn next(&mut self) -> Option<Self::Item> {
-        let hdr = 16usize;
-        if self.offset + hdr > self.data.len() {
-            return None;
-        }
-        let get = |o: usize| -> u32 {
-            let b = [self.data[self.offset + o], self.data[self.offset + o + 1], self.data[self.offset + o + 2], self.data[self.offset + o + 3]];
-            if self.little_endian { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) }
-        };
-        let incl_len = get(8) as usize;
-        self.offset += hdr;
-        if incl_len > self.data.len() - self.offset {
-            return None;
-        }
-        let rec = &self.data[self.offset..self.offset + incl_len];
-        self.offset += incl_len;
-        Some(rec)
-    }
+/// Commands carried inside batch envelopes, counting envelopes inside envelopes.
+/// Reported alongside the visible total because a list that only showed the
+/// envelopes would look healthy while hiding most of the traffic.
+fn count_inner(cmd: &GameCommand) -> usize {
+    let children = cmd.children();
+    children.len() + children.iter().map(count_inner).sum::<usize>()
 }
 
 fn dump_body(cmd_id: u16, json: &Value) {
@@ -97,7 +40,10 @@ fn dump_body(cmd_id: u16, json: &Value) {
         println!("  cmd {cmd_id} data: {data}");
         return;
     };
-    println!("  cmd {cmd_id} ({}):", json.get("name").and_then(Value::as_str).unwrap_or("?"));
+    println!(
+        "  cmd {cmd_id} ({}):",
+        json.get("name").and_then(Value::as_str).unwrap_or("?")
+    );
     for (k, v) in obj {
         match v {
             Value::Array(a) => println!("    {k}: [{}]", a.len()),
@@ -111,34 +57,45 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(pcap_path) = (!args.is_empty()).then(|| PathBuf::from(args.remove(0))) else {
-        bail!("usage: pcap-check <capture.pcap> [dump_cmd_id]");
-    };
-    let dump_cmd: Option<u16> = args.first().and_then(|s| s.parse().ok());
 
-    let raw = fs::read(&pcap_path).with_context(|| format!("read {}", pcap_path.display()))?;
-    if raw.len() < 24 {
-        bail!("not a pcap file (too short)");
+    let mut raw = std::env::args().skip(1);
+    let mut status_mode = false;
+    let mut samples: Option<PathBuf> = None;
+    let mut positional: Vec<String> = Vec::new();
+    while let Some(arg) = raw.next() {
+        match arg.as_str() {
+            "--status" => status_mode = true,
+            "--samples" => {
+                let dir = raw.next().context("--samples needs a directory")?;
+                samples = Some(PathBuf::from(dir));
+            }
+            other if other.starts_with("--") => bail!("unknown option {other}"),
+            other => positional.push(other.to_owned()),
+        }
     }
-    let magic = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]);
-    let little_endian = match magic {
-        0xa1b2c3d4 | 0xa1b23c4d => false,
-        0xd4c3b2a1 | 0x4d3cb2a1 => true,
-        _ => bail!("not a classic pcap file (magic {magic:#x})"),
+    let mut positional = positional.into_iter();
+    let Some(pcap_path) = positional.next().map(PathBuf::from) else {
+        bail!("usage: pcap-check [--status [--samples DIR]] <capture.pcap> [dump_cmd_id]");
     };
-    let linktype = if little_endian {
-        u32::from_le_bytes(raw[20..24].try_into()?)
-    } else {
-        u32::from_be_bytes(raw[20..24].try_into()?)
-    };
-    println!("pcap: {} bytes, linktype {linktype}", raw.len());
 
-    let mut sniffer = GameSniffer::new().set_initial_keys(load_keys()?);
+    if status_mode {
+        return replay_as_status(&pcap_path, samples.as_deref());
+    }
+    let dump_cmd: Option<u16> = positional.next().and_then(|s| s.parse().ok());
+    replay_command_health(&pcap_path, dump_cmd)
+}
+
+fn replay_command_health(pcap_path: &Path, dump_cmd: Option<u16>) -> Result<()> {
+    let mut frames =
+        PcapFrames::open(pcap_path).with_context(|| format!("read {}", pcap_path.display()))?;
+    println!("pcap: linktype {}", frames.linktype());
+
+    let mut sniffer = GameSniffer::new().set_initial_keys(dispatch_keys()?);
 
     let mut total_records = 0usize;
     let mut fed = 0usize;
     let mut total_commands = 0usize;
+    let mut inner_commands = 0usize;
     let mut parse_errors: Vec<(u16, String, u16, u32)> = Vec::new();
     let mut unknown = 0usize;
     let mut got_items = false;
@@ -146,9 +103,20 @@ fn main() -> Result<()> {
     let mut got_achievements = false;
     let mut dump_seen = 0usize;
 
-    for record in (PcapRecords { data: &raw, little_endian, offset: 24 }) {
+    for record in &mut frames {
+        let (record, _timestamp_ms) = match record {
+            Ok(record) => record,
+            // Reported rather than swallowed: a file that stops mid-record has
+            // nothing to do with the game, and the totals below still matter.
+            Err(e) => {
+                println!("[warn] replay stopped: {e}");
+                break;
+            }
+        };
         total_records += 1;
-        let Some(frame) = prepare(record) else { continue };
+        let Some(frame) = prepare_frame(&record) else {
+            continue;
+        };
         fed += 1;
         match sniffer.receive_packet(frame) {
             None => {}
@@ -159,12 +127,17 @@ fn main() -> Result<()> {
             Some(GamePacket::Commands(commands)) => {
                 for cmd in commands {
                     total_commands += 1;
+                    inner_commands += count_inner(&cmd);
                     let s = cmd.summary_json();
                     println!(
                         "[cmd] #{fed} id={} {} {} header_len={} size={} field_count={:?} err={}",
                         cmd.command_id,
                         s.get("name").and_then(Value::as_str).unwrap_or("?"),
-                        if cmd.direction == PacketDirection::Sent { "C2S" } else { "S2C" },
+                        if cmd.direction == PacketDirection::Sent {
+                            "C2S"
+                        } else {
+                            "S2C"
+                        },
                         cmd.header_len,
                         cmd.data_len,
                         s.get("field_count"),
@@ -190,7 +163,7 @@ fn main() -> Result<()> {
                                 cmd.command_id
                             );
                         }
-                        let json = cmd.to_json().unwrap_or(Value::Null);
+                        let json = cmd.to_json();
                         dump_body(cmd.command_id, &json);
                     }
                     got_items |= matches_item_packet(&cmd).is_some();
@@ -199,7 +172,10 @@ fn main() -> Result<()> {
                     if s.get("parse_error") == Some(&Value::Bool(true)) {
                         parse_errors.push((
                             cmd.command_id,
-                            s.get("name").and_then(Value::as_str).unwrap_or("?").to_owned(),
+                            s.get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("?")
+                                .to_owned(),
                             cmd.header_len,
                             cmd.data_len,
                         ));
@@ -211,9 +187,14 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("\nrecords: {total_records}, fed to sniffer: {fed}, commands decoded: {total_commands}");
+    println!(
+        "\nrecords: {total_records}, fed to sniffer: {fed}, commands decoded: {total_commands}, inside batch envelopes: {inner_commands}"
+    );
     println!("data collection: items={got_items} avatars={got_avatars} achievements={got_achievements}");
-    println!("parse errors: {}   unknown commands: {unknown}", parse_errors.len());
+    println!(
+        "parse errors: {}   unknown commands: {unknown}",
+        parse_errors.len()
+    );
     if let Some(id) = dump_cmd {
         if dump_seen == 0 {
             println!("cmd {id}: not found in capture");
@@ -225,5 +206,71 @@ fn main() -> Result<()> {
     if parse_errors.len() > 15 {
         println!("  ... {} more", parse_errors.len() - 15);
     }
+    Ok(())
+}
+
+/// Drive the app's own [`Session`] and print each packet's status payload as a
+/// JSON line, plus a tally of what the front end would have seen.
+///
+/// `--samples` points at a directory of persisted command bodies, which is what
+/// lets a blind session (one whose handshake was never captured) decode at all.
+/// The session rewrites that file when it learns a new body, so point it at a
+/// copy unless seeing the real one update is the point.
+fn replay_as_status(pcap_path: &Path, samples_dir: Option<&Path>) -> Result<()> {
+    let mut session = Session::new(samples_dir).context("open a decode session")?;
+    let mut frames =
+        PcapFrames::open(pcap_path).with_context(|| format!("read {}", pcap_path.display()))?;
+
+    let mut packets = 0usize;
+    let mut commands = 0usize;
+    let mut nested = 0usize;
+    let mut origins: HashMap<String, usize> = HashMap::new();
+
+    for record in &mut frames {
+        let (record, _timestamp_ms) = match record {
+            Ok(record) => record,
+            Err(e) => {
+                println!("[warn] replay stopped: {e}");
+                break;
+            }
+        };
+        let Some(outcome) = session.feed(&record) else {
+            continue;
+        };
+        packets += 1;
+
+        let summaries = outcome
+            .status
+            .get("commands")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for summary in summaries {
+            commands += 1;
+            if !summary.get("parent_index").is_none_or(Value::is_null) {
+                nested += 1;
+            }
+        }
+        // Sampled as state, at the moment this packet decoded: a frame that
+        // decodes nothing carries no payload to read an origin off.
+        let origin = session
+            .key_origin()
+            .map(key_origin_name)
+            .unwrap_or("none")
+            .to_owned();
+        *origins.entry(origin).or_default() += 1;
+
+        println!("{}", serde_json::to_string(&outcome.status)?);
+    }
+
+    let mut origins: Vec<(&String, &usize)> = origins.iter().collect();
+    origins.sort();
+    let origins = origins
+        .iter()
+        .map(|(origin, count)| format!("{origin}={count}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("\nstatus payloads: {packets}, commands: {commands}, inside envelopes: {nested}");
+    println!("key origin per decoded packet: {origins}");
     Ok(())
 }

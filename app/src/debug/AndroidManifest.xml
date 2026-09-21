@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-only wiring: the adb test hooks must not exist in a release APK. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- The debug build's adb surface: stall / dump / export samples / replay. -->
+        <receiver
+            android:name="com.esc.irminsul.DebugTestReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.esc.irminsul.STALL_TUNNEL" />
+                <action android:name="com.esc.irminsul.DUMP" />
+                <action android:name="com.esc.irminsul.DUMP_STOP" />
+                <action android:name="com.esc.irminsul.EXPORT_SAMPLES" />
+                <action android:name="com.esc.irminsul.REPLAY" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

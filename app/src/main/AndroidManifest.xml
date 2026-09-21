@@ -27,17 +27,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- adb test hook: am broadcast -a com.esc.irminsul.STALL_TUNNEL (extra "ms") -->
-        <receiver
-            android:name="com.esc.irminsul.StallTestReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.esc.irminsul.STALL_TUNNEL" />
-                <action android:name="com.esc.irminsul.DUMP" />
-                <action android:name="com.esc.irminsul.DUMP_STOP" />
-            </intent-filter>
-        </receiver>
     </application>
 
 </manifest>

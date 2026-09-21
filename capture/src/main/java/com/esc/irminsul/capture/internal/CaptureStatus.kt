@@ -2,15 +2,17 @@ package com.esc.irminsul.capture.internal
 
 import android.util.Log
 import com.esc.irminsul.capture.CaptureTraffic
+import com.esc.irminsul.capture.KeyOrigin
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Module-owned capture state: whether a session is live, and how many packets
- * the queue has dropped. Written only by [CaptureService] (and by the facade
- * when it opens a session); read through the facade.
+ * Module-owned capture state: whether a session is live, what its queue dropped,
+ * how much traffic it has accounted for, and which key is decrypting it. Written
+ * only by [CaptureService] and the decode worker (and by the facade when it opens
+ * a session); read through the facade.
  *
  * Collection progress deliberately does not live here: that state arrives on
  * every [com.esc.irminsul.capture.DataStatus] publish, so mirroring it would
@@ -68,5 +70,25 @@ internal object CaptureStatus {
             receivedBytes = received,
             connections = connections
         )
+    }
+
+    private val _keyOrigin = MutableStateFlow<KeyOrigin?>(null)
+
+    /** How the current session's key was obtained; null means nothing has opened it. */
+    val keyOrigin: StateFlow<KeyOrigin?> = _keyOrigin.asStateFlow()
+
+    fun resetKeyOrigin() {
+        _keyOrigin.value = null
+    }
+
+    /**
+     * Written by the decode thread after every packet, because a client that
+     * re-logs in leaves no other trace: its first frames decrypt with nothing, so
+     * no status payload arrives to say so.
+     */
+    fun recordKeyOrigin(origin: KeyOrigin?) {
+        if (_keyOrigin.value != origin) {
+            _keyOrigin.value = origin
+        }
     }
 }
