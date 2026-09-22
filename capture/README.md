@@ -9,15 +9,26 @@ decryption and proto parsing, arm64-v8a only).
 ## Publish
 
 ```bash
-./gradlew :capture:publishToMavenLocal     # or publishReleasePublicationTo<repo>
+./gradlew :capture:check :capture:assembleRelease :capture:publishToMavenLocal
 ```
 
-Produces `com.esc.irminsul:capture:1.6.0`.
+Produces `com.esc.irminsul:capture:<version>`, where the version is the one line
+`captureVersion` in `gradle.properties`. That line also numbers the host app
+(`versionName`, and `versionCode` derived from it as `1.6.0 → 10600`) and the
+sample's dependency on the published AAR, so a release cannot be stamped two ways.
+Bump it when the seam moves: a new public type or member is a minor, a behaviour fix
+is a patch. The Rust crates keep their own versions — those are internal, and nothing
+a host installs is numbered from them.
+
+CI runs the same three tasks in a `library` job, then insists the AAR actually
+carries `libirminsul.so` and `libcapture.so` and builds `capture-sample` against the
+published artifact rather than the source project — the one claim a host's
+`implementation(...)` depends on.
 
 ## Integrate
 
 ```kotlin
-dependencies { implementation("com.esc.irminsul:capture:1.6.0") }
+dependencies { implementation("com.esc.irminsul:capture:1.6.0") }   // = captureVersion
 ```
 
 The public interface is the `com.esc.irminsul.capture` package; everything else

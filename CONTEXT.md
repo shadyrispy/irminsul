@@ -118,7 +118,10 @@ The capture module's interface is `com.esc.irminsul.capture` — the facade
 `PermissionKind`, `Completion`, `SessionPhase`, `KeyOrigin` and
 `CaptureTraffic`. Everything
 else lives in `com.esc.irminsul.capture.internal` and is `internal`; see
-`docs/adr/0001`.
+`docs/adr/0001`. The seam ships under one number: `captureVersion` in
+`gradle.properties` is the AAR's artifact version, the host app's `versionName` and
+the sample's dependency at once, so a release cannot be stamped two ways. The Rust
+crates' own versions are internal facts.
 
 ## Native contracts
 

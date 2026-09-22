@@ -220,9 +220,10 @@ tasks.matching { it.name == 'check' }.configureEach {
     dependsOn 'verifyNativePayloadContract'
 }
 
-// Publish as `com.esc.irminsul:capture:<version>`; `./gradlew :capture:publishToMavenLocal`
-// (or :capture:publishReleasePublicationTo<repo>) produces an AAR that already
-// carries both native libraries, the VPN service and the permissions.
+// Publish as `com.esc.irminsul:capture:<captureVersion>`; `./gradlew
+// :capture:publishToMavenLocal` (or :capture:publishReleasePublicationTo<repo>) produces an
+// AAR that already carries both native libraries, the VPN service and the permissions.
+// The version is one line in gradle.properties, shared with the host app and the sample.
 afterEvaluate {
     publishing {
         publications {
@@ -230,7 +231,7 @@ afterEvaluate {
                 from components.release
                 groupId = 'com.esc.irminsul'
                 artifactId = 'capture'
-                version = '1.6.0'
+                version = captureVersion
                 pom {
                     name = 'Irminsul Capture'
                     description = 'Genshin packet capture, decryption and protobuf ' +
