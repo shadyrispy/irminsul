@@ -162,6 +162,7 @@ object IrminsulCapture {
     private var activeSource: CaptureSource? = null
     private var replayJob: Job? = null
     private var autoReloginJob: Job? = null
+    private val _replayFinished = MutableStateFlow(true)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     init {
@@ -504,8 +505,11 @@ object IrminsulCapture {
      * actually up — a stop during VPN setup would otherwise be dropped.
      */
     private fun endActiveSession(context: Context) {
+        val wasReplaying = replayJob != null
         replayJob?.cancel()
         replayJob = null
+        // A cancelled replay is still "over" as far as a waiting host is concerned.
+        if (wasReplaying) _replayFinished.value = true
         autoReloginJob?.cancel()
         autoReloginJob = null
         if (activeSource is CaptureSource.Vpn || isCapturing.value) {
@@ -603,11 +607,31 @@ object IrminsulCapture {
             log("pcap replay did not start: no capture pipeline behind $path")
             return
         }
+        _replayFinished.value = false
         replayJob = scope.launch(Dispatchers.IO) {
-            when (val packets = worker.readPcapFile(path)) {
-                null -> log("pcap replay did not start: $path could not be opened")
-                else -> log("pcap replay finished: $packets packets from $path")
+            try {
+                when (val packets = worker.readPcapFile(path)) {
+                    null -> log("pcap replay did not start: $path could not be opened")
+                    else -> log("pcap replay finished: $packets packets from $path")
+                }
+            } finally {
+                // Reached on the failure paths too: a host waiting for the replay
+                // must not have to guess whether "nothing happened" means failed
+                // or still queued. The reason is on `logs`.
+                _replayFinished.value = true
             }
         }
     }
+
+    /**
+     * Whether a [CaptureSource.File] replay has run to its end. `true` also means
+     * "no replay is in flight", so a host that only ever calls [start] with a file
+     * can wait on this going false and then true.
+     *
+     * This exists because a host cannot derive the end of a replay from [packets]:
+     * that ring buffer is capped, so its size stops growing long before a capture
+     * ends, and "size unchanged" looks identical to "replay over". Reading the
+     * export early is how a host gets an inventory missing its last category.
+     */
+    val replayFinished: StateFlow<Boolean> = _replayFinished.asStateFlow()
 }

@@ -18,7 +18,7 @@ OpenCV host already ships.
 
 Produces `com.esc.irminsul:capture:<version>`, where the version is the one line
 `captureVersion` in `gradle.properties`. That line also numbers the host app
-(`versionName`, and `versionCode` derived from it as `1.8.1 → 10801`) and the
+(`versionName`, and `versionCode` derived from it as `1.9.0 → 10900`) and the
 sample's dependency on the published AAR, so a release cannot be stamped two ways.
 Bump it when the seam moves: a new public type or member is a minor, a behaviour fix
 is a patch. The Rust crates keep their own versions — those are internal, and nothing
@@ -32,7 +32,7 @@ published artifact rather than the source project — the one claim a host's
 ## Integrate
 
 ```kotlin
-dependencies { implementation("com.esc.irminsul:capture:1.8.1") }   // = captureVersion
+dependencies { implementation("com.esc.irminsul:capture:1.9.0") }   // = captureVersion
 ```
 
 The public interface is the `com.esc.irminsul.capture` package; everything else
@@ -165,6 +165,11 @@ source — the module reads the file off the caller's thread:
 ```kotlin
 IrminsulCapture.start(context, CaptureSource.File(path), sink)
 ```
+
+Wait for [IrminsulCapture.replayFinished] to go `true` before reading the export —
+not for [packets] to stop growing. That ring is capped, so its size flattens long
+before a file runs out, and "size unchanged" is indistinguishable from "replay
+over": a host that reads early gets an inventory missing its last category.
 
 `capture-sample/` is a working host that consumes the published coordinates —
 it is built against the AAR from mavenLocal, never against the source project.
