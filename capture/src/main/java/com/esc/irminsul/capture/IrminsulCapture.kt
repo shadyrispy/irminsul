@@ -1,9 +1,11 @@
 package com.esc.irminsul.capture
 
 import android.app.ActivityManager
+import android.app.Application
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.esc.irminsul.capture.internal.CaptureNotifier
@@ -14,6 +16,7 @@ import com.esc.irminsul.capture.internal.PacketProcessor
 import com.esc.irminsul.capture.internal.PacketRingBuffer
 import com.esc.irminsul.capture.internal.PermissionHelper
 import com.esc.irminsul.capture.internal.RawPacket
+import java.io.File
 import java.util.concurrent.LinkedBlockingQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -220,6 +223,17 @@ object IrminsulCapture {
     }.stateIn(scope, SharingStarted.Eagerly, SessionPhase.Idle)
 
     /**
+     * Whether this device can run the native stack at all, without starting
+     * anything. [initNative] says the same thing, but only while it also creates a
+     * notification channel and the sniffer — too much for a host that is deciding
+     * whether to offer the feature. A host that gets [CaptureError.NativeUnavailable]
+     * here has no capture to gate: the libraries are not installed for its ABI.
+     */
+    fun probeNativeSupport(): CaptureResult<Unit> =
+        if (NativeLib.isAvailable()) CaptureResult.Ok(Unit)
+        else CaptureResult.Err(CaptureError.NativeUnavailable)
+
+    /**
      * Loads the native library and creates the sniffer. Call once at startup;
      * [start] will not decode anything until this returns [CaptureResult.Ok].
      */
@@ -293,13 +307,24 @@ object IrminsulCapture {
      *
      * Progress arrives on [packets] and through [sink]. A session that fails
      * after this call is reported on [logs] and by [isCapturing] going false.
+     *
+     * Returns [CaptureError.WrongProcess] — having started nothing — when a live
+     * capture is asked for outside the app's default process; a [CaptureSource.File]
+     * replay has no service to hand a queue to, so any process may run one.
      */
     fun start(
         context: Context,
         source: CaptureSource,
         sink: DataStatusSink,
         config: Config = Config()
-    ) {
+    ): CaptureResult<Unit> {
+        if (source is CaptureSource.Vpn && !isDefaultProcess(context)) {
+            val why = "Capture has to start in the app's default process (${context.packageName}); " +
+                "this call came from another one and the packet queue would never reach the service"
+            Log.w(TAG, why)
+            log(why)
+            return CaptureResult.Err(CaptureError.WrongProcess)
+        }
         appContext = context.applicationContext
         endActiveSession(context)
         activeSource = source
@@ -315,6 +340,30 @@ object IrminsulCapture {
             }
             is CaptureSource.File -> replay(source.path)
         }
+        return CaptureResult.Ok(Unit)
+    }
+
+    /**
+     * Whether this call is in the process the capture service will run in. The
+     * service is merged into a host's manifest without `android:process`, so it gets
+     * the default one, and [CaptureService.setPacketQueue] hands it the queue as a
+     * process-static field — a session started elsewhere has a live tunnel and an
+     * empty list, which reads as a game that is not playing.
+     *
+     * A process name that cannot be read is not evidence of a second process: that
+     * answers `true`, because refusing a working capture is the worse error.
+     */
+    private fun isDefaultProcess(context: Context): Boolean {
+        val name = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                Application.getProcessName()
+            } else {
+                File("/proc/self/cmdline").readBytes()
+                    .takeWhile { it != 0.toByte() }
+                    .toByteArray().toString(Charsets.UTF_8)
+            }
+        }.getOrNull()
+        return name == null || name == context.packageName
     }
 
     /**

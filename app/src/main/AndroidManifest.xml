@@ -3,7 +3,16 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Capture permissions, <queries> and the VPN service come from the
-         :capture module's manifest via manifest merging. -->
+         :capture module's manifest via manifest merging.
+
+         These two do not, and that is the point: this app is the one that shows
+         the completion heads-up and the one that offers "don't optimize my
+         battery" as a button, so the permission that makes each work is this
+         app's decision to make. The library asks for neither on its hosts'
+         behalf. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />

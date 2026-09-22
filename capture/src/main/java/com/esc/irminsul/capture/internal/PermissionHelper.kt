@@ -8,6 +8,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import com.esc.irminsul.capture.PermissionKind
 import com.esc.irminsul.capture.PermissionSnapshot
 
@@ -19,15 +20,8 @@ internal object PermissionHelper {
      * state, so it returns the public type rather than a private mirror of it.
      */
     fun checkPermissions(context: Context): PermissionSnapshot {
-        val notificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
-
         return PermissionSnapshot(
-            notificationGranted = notificationGranted,
+            notificationGranted = notificationState(context),
             headsUpEnabled = isHeadsUpEnabled(context),
             vpnPermissionGranted = isVpnPermissionGranted(context),
             batteryOptimizationExempt = isBatteryOptimizationExempt(context),
@@ -36,6 +30,28 @@ internal object PermissionHelper {
             romHint = RomUtils.getRomPermissionTips()
         )
     }
+
+    /**
+     * `POST_NOTIFICATIONS` on 13+ — and never a blocker for a host that did not
+     * declare it. The library stopped declaring the permission on its hosts'
+     * behalf, so without this a host that shows no completion notification would
+     * read [PermissionSnapshot.allRequiredGranted] as false forever, on a capture
+     * that is working: a permission nobody is asking for is not one being waited on.
+     */
+    private fun notificationState(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        if (!isDeclaredPermission(context, android.Manifest.permission.POST_NOTIFICATIONS)) return true
+        return ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.POST_NOTIFICATIONS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun isDeclaredPermission(context: Context, permission: String): Boolean = runCatching {
+        val info = context.packageManager.getPackageInfo(
+            context.packageName, android.content.pm.PackageManager.GET_PERMISSIONS
+        )
+        info.requestedPermissions?.any { it == permission } == true
+    }.getOrDefault(false)
 
     /**
      * 检查悬浮通知（Heads-up）是否开启
@@ -80,6 +96,24 @@ internal object PermissionHelper {
     fun getBatteryOptimizationIntent(context: Context): Intent {
         return Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
             .setData(Uri.parse("package:${context.packageName}"))
+    }
+
+    /**
+     * The settings pages that can exempt this app, best first.
+     *
+     * The list page needs no permission of its own; the per-package page does, and
+     * asking for it without holding `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` fails in
+     * the Settings process rather than ours, where no `try` of ours can catch it.
+     * So the deep link is offered only to a host that declared it — which is now
+     * the host's choice to make, not this module's to make for it.
+     */
+    fun getBatteryOptimizationFixIntents(context: Context): List<Intent> {
+        val listPage = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        val holdsPermission = ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        return if (holdsPermission) listOf(getBatteryOptimizationIntent(context), listPage)
+        else listOf(listPage)
     }
 
     fun getNotificationSettingsIntent(context: Context): Intent {
@@ -130,7 +164,7 @@ internal object PermissionHelper {
                     getAppNotificationSettingsIntent(context)
                 ) + details
             PermissionKind.Vpn -> listOfNotNull(getVpnPermissionIntent(context))
-            PermissionKind.BatteryOptimization -> listOf(getBatteryOptimizationIntent(context))
+            PermissionKind.BatteryOptimization -> getBatteryOptimizationFixIntents(context)
             PermissionKind.AutoStart -> listOfNotNull(getAutoStartSettingsIntent(context)) + details
             PermissionKind.AppDetails -> details
         }

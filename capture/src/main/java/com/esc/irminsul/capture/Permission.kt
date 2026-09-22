@@ -27,8 +27,14 @@ enum class PermissionKind {
 /**
  * State of everything the capture flow can be blocked on. Emitted by
  * [IrminsulCapture.permissions] after a refresh.
+ *
+ * Every field reads `true` when the thing it judges cannot apply to this host —
+ * `notificationGranted` when the host never declared `POST_NOTIFICATIONS`,
+ * `batteryOptimizationExempt` below API 23 — because a blocker a host did not
+ * ask for is not a blocker it is waiting on.
  */
 data class PermissionSnapshot(
+    /** `POST_NOTIFICATIONS`, or true when the host does not declare it at all. */
     val notificationGranted: Boolean = false,
     val headsUpEnabled: Boolean = false,
     val vpnPermissionGranted: Boolean = false,

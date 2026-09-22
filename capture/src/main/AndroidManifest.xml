@@ -1,12 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- INTERNET is not decoration: the tunnel forwards what it captures
+         (zdtun opens the outbound sockets, and `protect()` keeps them out of the
+         tunnel), so a host that strips this permission does not get a degraded
+         capture — it gets a game that loses its connection. ACCESS_NETWORK_STATE
+         is read for the real DNS servers; without it the forwarder falls back to
+         a public resolver.
+
+         POST_NOTIFICATIONS is deliberately absent. It belongs to the host that
+         shows a notification the player can tap, not to the code that builds it:
+         the completion heads-up is one line of `Config`, and a host that turns it
+         off should not inherit a permission prompt it cannot decline. A host that
+         wants it declares it — `PermissionSnapshot.notificationGranted` reads the
+         truth either way, and the foreground-service notification the VPN needs is
+         not gated on it.
+
+         REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is absent for the same reason: the
+         battery-optimization list page opens without it, and the per-package page
+         (which needs it) is still tried first, so a host that declares it keeps
+         the deep link. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Genshin clients the capture flow needs to resolve -->
     <queries>

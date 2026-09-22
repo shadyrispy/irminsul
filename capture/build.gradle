@@ -15,7 +15,14 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags ""
-                arguments "-DANDROID_STL=c++_shared"
+                // The C capture core is pure C and neither shipped library links libc++
+                // (`libirminsul.so` needs libdl/libc, `libcapture.so` needs
+                // libandroid/liblog/libm/libdl/libc — their only C++-ish undefined
+                // symbols are `__cxa_atexit`/`__cxa_finalize@LIBC`, which bionic provides).
+                // `c++_shared` therefore bought nothing but a `libc++_shared.so` in the AAR
+                // that collided, byte-for-byte nothing, with a host's own (OpenCV ships one
+                // per ABI). `none` keeps the AAR to the two libraries it actually needs.
+                arguments "-DANDROID_STL=none"
             }
         }
         ndk {
@@ -29,12 +36,16 @@ android {
         }
     }
 
+    // The AAR is shipped to hosts we do not build, and a class file is only readable
+    // at or below the consumer's own target: 17 here forced every host to move its
+    // whole module to 17 to take a capture library that needs nothing of the sort.
+    // 11 is the floor a host can already assume; a host on 17 consumes it unchanged.
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
     }
     kotlinOptions {
-        jvmTarget = '17'
+        jvmTarget = '11'
     }
     lint {
         abortOnError false
@@ -190,7 +201,13 @@ tasks.matching { it.name == 'assembleDebug' }.configureEach {
 }
 
 dependencies {
-    implementation 'androidx.core:core-ktx:1.13.1'
+    // `core`, not `core-ktx`: the module's whole AndroidX surface is
+    // NotificationCompat and ContextCompat.startForegroundService, and no Kotlin
+    // extension from -ktx is called (every androidx import in src/main is one of
+    // those two). 1.10.1 is a version a host is very likely already on — pinning
+    // 1.13.1 here silently raised a consumer's core, which is the one thing a
+    // library POM should not do to a host it has never met.
+    implementation 'androidx.core:core:1.10.1'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
     testImplementation 'junit:junit:4.13.2'
     // Real org.json for JVM unit tests; the android.jar stubs throw "not mocked".

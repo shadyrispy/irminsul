@@ -20,6 +20,14 @@ sealed interface CaptureError {
     /** The action needs a running capture session, and there is none. */
     data object NoActiveSession : CaptureError
 
+    /**
+     * A live capture was started from a process other than the app's default one.
+     * The packet queue reaches the capture service through a process-static field,
+     * so from a second process the tunnel comes up and nothing is ever delivered:
+     * the failure is silent, which is why it is refused here instead.
+     */
+    data object WrongProcess : CaptureError
+
     /** None of the captured game packages is installed, so there is nothing to restart. */
     data object NoGameInstalled : CaptureError
 
