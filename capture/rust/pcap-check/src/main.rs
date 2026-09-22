@@ -6,9 +6,12 @@
 //!     Per-command decode health: names, sizes, parse errors, envelope contents.
 //!   `cargo run --release -- --status [--samples DIR] <capture.pcap>`
 //!     One status JSON per packet, exactly as a front end receives it.
+//!   `cargo run --release -- --good [--samples DIR] <capture.pcap>`
+//!     The GOOD export the session would hand a host, on stdout; the counts go to
+//!     stderr so the JSON can be piped straight into a reader.
 //!
 //! The first mode drives [`GameSniffer`] directly so its counters stay comparable
-//! across refactors; the second drives [`Session`], so what it prints is the
+//! across refactors; the other two drive [`Session`], so what they print is the
 //! payload contract under real traffic.
 
 use std::path::PathBuf;
@@ -19,7 +22,9 @@ use auto_artifactarium::{
     matches_achievement_packet, matches_avatar_packet, matches_item_packet, GameCommand, GamePacket,
     GameSniffer, PacketDirection,
 };
-use irminsul_decode::{PcapFrames, Session, dispatch_keys, key_origin_name, prepare_frame};
+use irminsul_decode::{
+    ExportSettings, PcapFrames, Session, dispatch_keys, key_origin_name, prepare_frame,
+};
 use serde_json::Value;
 use std::path::Path;
 
@@ -60,11 +65,13 @@ fn main() -> Result<()> {
 
     let mut raw = std::env::args().skip(1);
     let mut status_mode = false;
+    let mut good_mode = false;
     let mut samples: Option<PathBuf> = None;
     let mut positional: Vec<String> = Vec::new();
     while let Some(arg) = raw.next() {
         match arg.as_str() {
             "--status" => status_mode = true,
+            "--good" => good_mode = true,
             "--samples" => {
                 let dir = raw.next().context("--samples needs a directory")?;
                 samples = Some(PathBuf::from(dir));
@@ -75,9 +82,12 @@ fn main() -> Result<()> {
     }
     let mut positional = positional.into_iter();
     let Some(pcap_path) = positional.next().map(PathBuf::from) else {
-        bail!("usage: pcap-check [--status [--samples DIR]] <capture.pcap> [dump_cmd_id]");
+        bail!("usage: pcap-check [--status|--good] [--samples DIR] <capture.pcap> [dump_cmd_id]");
     };
 
+    if good_mode {
+        return replay_as_good(&pcap_path, samples.as_deref());
+    }
     if status_mode {
         return replay_as_status(&pcap_path, samples.as_deref());
     }
@@ -272,5 +282,48 @@ fn replay_as_status(pcap_path: &Path, samples_dir: Option<&Path>) -> Result<()> 
         .join(" ");
     println!("\nstatus payloads: {packets}, commands: {commands}, inside envelopes: {nested}");
     println!("key origin per decoded packet: {origins}");
+    Ok(())
+}
+
+/// Replay through the same [`Session`] the app runs and print the GOOD export it
+/// would hand a host.
+///
+/// This is the only way to look at that export without a phone in hand: the
+/// artifact, weapon and character entries are what a host keys its own plans off,
+/// so a field that appears here appears there, and a field renamed here breaks a
+/// host that a device-only check would not have caught until a player did.
+/// The JSON goes to stdout and the counts to stderr, so `--good` can be piped
+/// straight into a reader.
+fn replay_as_good(pcap_path: &Path, samples_dir: Option<&Path>) -> Result<()> {
+    let mut session = Session::new(samples_dir).context("open a decode session")?;
+    let mut frames =
+        PcapFrames::open(pcap_path).with_context(|| format!("read {}", pcap_path.display()))?;
+
+    let mut decoded = 0usize;
+    for record in &mut frames {
+        let (record, _timestamp_ms) = match record {
+            Ok(record) => record,
+            Err(e) => {
+                // stderr, because stdout is the export a reader parses.
+                eprintln!("[warn] replay stopped: {e}");
+                break;
+            }
+        };
+        if session.feed(&record).is_some() {
+            decoded += 1;
+        }
+    }
+
+    let json = session.export_good(&ExportSettings::default())?;
+    let value: Value = serde_json::from_str(&json).context("the export is not its own JSON")?;
+    let count = |key: &str| value.get(key).and_then(Value::as_array).map_or(0, Vec::len);
+    eprintln!(
+        "decoded packets: {decoded}   characters: {}   artifacts: {}   weapons: {}   materials: {}",
+        count("characters"),
+        count("artifacts"),
+        count("weapons"),
+        value.get("materials").and_then(Value::as_object).map_or(0, |m| m.len()),
+    );
+    println!("{json}");
     Ok(())
 }

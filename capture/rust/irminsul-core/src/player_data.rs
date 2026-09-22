@@ -9,7 +9,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::good::{self, fake_uninitialized_4th_line};
 
+/// A host sends what it wants changed, not the whole table: without `default` a
+/// settings object missing one field failed to parse, and the caller's own
+/// `min_artifact_rarity` was silently dropped with it — measured on a device,
+/// where a host that asked for 4★+ got 3★ in its export and then rejected its own
+/// import. `null` still means "all defaults", as the JNI contract has always said.
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
 pub struct ExportSettings {
     pub include_characters: bool,
     pub include_artifacts: bool,
@@ -228,6 +234,7 @@ impl PlayerData {
                     constellation,
                     ascension,
                     talent: good::TalentLevel { auto, skill, burst },
+                    element: element.as_ref().map(|e| e.as_ref().to_string()),
                 })
             })
             .collect()
@@ -378,6 +385,7 @@ impl PlayerData {
 
                 Some(good::Weapon {
                     key: good::to_good_key(&weapon_data.name),
+                    rarity: weapon_data.rarity,
                     level,
                     ascension,
                     refinement,

@@ -32,6 +32,10 @@ pub struct Artifact {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Weapon {
     pub key: String,
+    /// The game's own star count, which the export already filtered on and a host
+    /// would otherwise have to look up by name — and could not get right for a
+    /// weapon whose name it does not know.
+    pub rarity: u32,
     pub level: u32,
     pub ascension: u32,
     pub refinement: u32,
@@ -53,6 +57,11 @@ pub struct Character {
     pub constellation: u32,
     pub ascension: u32,
     pub talent: TalentLevel,
+    /// Read off the burst, the only skill that carries an element, so this is null
+    /// for a character whose burst the client never sent. A host that maps keys
+    /// through its own dictionary does not need it; one showing what it actually
+    /// captured would otherwise be guessing from a name.
+    pub element: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
