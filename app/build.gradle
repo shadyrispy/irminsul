@@ -13,7 +13,7 @@ android {
         minSdk 21
         targetSdk 35
         // The same number as the library it embeds; see `captureVersion` in
-        // gradle.properties. 1.6.0 becomes 10600, so an installed host always upgrades.
+        // gradle.properties. 1.8.1 becomes 10801, so an installed host always upgrades.
         versionCode captureVersion.tokenize('.').with {
             parts -> parts[0].toInteger() * 10_000 + parts[1].toInteger() * 100 + parts[2].toInteger()
         }

@@ -4,7 +4,11 @@ Genshin packet capture, session decryption and protobuf command decoding as an
 embeddable Android library. The AAR is self-contained: the VPN service and its
 permissions merge in automatically, and it ships both native libraries
 (`libcapture.so` — VPN loop + zdtun flow tracking; `libirminsul.so` —
-decryption and proto parsing, arm64-v8a only).
+decryption and proto parsing, arm64-v8a only). Nothing else: it used to carry a
+`libc++_shared.so` too, which no library in it links against (their only
+undefined C++-adjacent symbols are `__cxa_atexit`/`__cxa_finalize@LIBC`, from
+bionic) and which collided, content for content nothing, with the one every
+OpenCV host already ships.
 
 ## Publish
 
@@ -14,7 +18,7 @@ decryption and proto parsing, arm64-v8a only).
 
 Produces `com.esc.irminsul:capture:<version>`, where the version is the one line
 `captureVersion` in `gradle.properties`. That line also numbers the host app
-(`versionName`, and `versionCode` derived from it as `1.6.0 → 10600`) and the
+(`versionName`, and `versionCode` derived from it as `1.8.1 → 10801`) and the
 sample's dependency on the published AAR, so a release cannot be stamped two ways.
 Bump it when the seam moves: a new public type or member is a minor, a behaviour fix
 is a patch. The Rust crates keep their own versions — those are internal, and nothing
@@ -28,13 +32,16 @@ published artifact rather than the source project — the one claim a host's
 ## Integrate
 
 ```kotlin
-dependencies { implementation("com.esc.irminsul:capture:1.6.0") }   // = captureVersion
+dependencies { implementation("com.esc.irminsul:capture:1.8.1") }   // = captureVersion
 ```
 
 The public interface is the `com.esc.irminsul.capture` package; everything else
-is `internal` (see `docs/adr/0001` and `docs/adr/0002`).
+is `internal` (see `docs/adr/0001` and `docs/adr/0002`). The classes are compiled
+for Java 11, so a host does not have to raise its own target to take the library.
 
 ```kotlin
+IrminsulCapture.probeNativeSupport()   // Ok, or Err(NativeUnavailable) on an ABI the libs
+                                       // are not built for — ask this before offering capture
 IrminsulCapture.initNative(context)      // CaptureResult.Ok | Err(NativeUnavailable | SnifferInitFailed)
 
 val sink = object : DataStatusSink {
@@ -49,8 +56,13 @@ if (!blocked.vpnPermissionGranted) {
 IrminsulCapture.openFixSettings(context, PermissionKind.Notifications)  // ROM chain resolved inside
 
 IrminsulCapture.start(applicationContext, CaptureSource.Vpn, sink)
+    // CaptureResult<Unit>: Ok once the session has actually been set up.
     // Config(completionNotification = false) for hosts with their own UI
     // start() ends any running session first; there is one capture at a time
+    // Err(WrongProcess) starts nothing: a live capture handed the packet queue
+    // through a process-static field, so from a second process the tunnel would
+    // come up and deliver nothing. A host with more than one process has to start
+    // from the default one; a CaptureSource.File replay may run anywhere.
 IrminsulCapture.stop(applicationContext)                    // works for either source
 IrminsulCapture.close()
 
@@ -61,6 +73,27 @@ IrminsulCapture.commandBody(packetId, commandIndex)         // full proto body J
 IrminsulCapture.exportGood(settingsJson) / exportAchievements(format)
 IrminsulCapture.exportKnownBodies(destDir)                   // the samples, where a shell can read them
 ```
+
+### The GOOD export
+
+`exportGood(settingsJson)` returns `{format:"GOOD", version:3, source:"Irminsul",
+characters, artifacts, weapons, materials}` with **camelCase** keys (`setKey`,
+`slotKey`, `mainStatKey`, `substats[{key,value,initialValue}]`, `location`, `lock`,
+`totalRolls`, `astralMark`, `elixerCrafted`, `unactivatedSubstats`), which is the
+shape a host keys its own plans off. `settingsJson` filters it
+(`include_*`, `min_artifact_rarity`, `fake_initialize_4th_line`, …); a partial object is
+fine — the fields it omits take their defaults, which *include* 3★ artifacts, so a host
+that only accepts 4★/5★ has to ask for that here rather than filter after the fact.
+
+Two fields are ours rather than GOOD's, both because a host would otherwise
+re-derive them from a name table: `weapons[].rarity` (the star count the export
+already filtered on) and `characters[].element` (read off the burst, so null for a
+character whose burst was never sent). What is **not** in the export, because the
+packets do not carry it: an artifact's favourite flag, a character's fame, and a
+talent's grey-lock state; and no main-stat *value*, which needs a level table the
+embedded game data does not hold. `pcap-check --good <capture.pcap>` prints this
+export for a recorded capture on a desktop — the same `Session::export_good` the
+phone calls, so a renamed key fails there instead of on a player.
 
 ### Catching the login
 
@@ -164,9 +197,27 @@ CI runs both: the debug job is `assembleDebug :capture:check`.
   dropped and counted in `droppedPackets`. A `CaptureSource.File` replay blocks
   until the queue drains instead.
 - **arm64-v8a only**; the game client packages captured are
-  `com.miHoYo.GenshinImpact` / `.Yuanshen` / `.ys.bilibili`.
-- The library posts a foreground-service notification; request
-  `POST_NOTIFICATIONS` on Android 13+.
+  `com.miHoYo.GenshinImpact` / `.Yuanshen` / `.ys.bilibili`. Ask
+  [IrminsulCapture.probeNativeSupport] rather than reading the ABI yourself: it is
+  the same question the loader answers, and it does not start a session to ask it.
+- **`INTERNET` is not optional, and neither is a working forwarder.** The tunnel
+  carries the game's packets out again (zdtun opens the outbound sockets, and
+  `protect()` keeps them out of the tunnel), so a host that strips `INTERNET` does
+  not get a degraded capture — it gets a game that loses its connection. A host
+  with a "this app never talks to the network" promise has to scope that promise
+  around this feature rather than keep it through it. `ACCESS_NETWORK_STATE` is the
+  softer one: without it the DNS forwarder falls back to a public resolver instead
+  of the network's own.
+- **The notification permission belongs to the host that shows the notification.**
+  This module declares neither `POST_NOTIFICATIONS` nor
+  `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`: the completion heads-up is one line of
+  [Config], and the battery-optimization list page opens without a permission of
+  its own (the per-package page, which needs one, is still offered first to any
+  host that declared it). A host that wants either **declares it in its own
+  manifest** — asking at runtime for an undeclared permission is denied without
+  ever showing a dialog, and `PermissionSnapshot` reports such a host as
+  unblocked rather than waiting on a grant that will never come. The
+  foreground-service notification the VPN needs is not gated on it.
 - **Heads-up may need one manual enable.** Some ROMs (verified on EMUI 10)
   create a newly requested `IMPORTANCE_HIGH` channel at `DEFAULT` and mark the
   importance user-locked, so `PermissionSnapshot.headsUpEnabled` can be false on

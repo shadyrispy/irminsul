@@ -123,6 +123,18 @@ else lives in `com.esc.irminsul.capture.internal` and is `internal`; see
 the sample's dependency at once, so a release cannot be stamped two ways. The Rust
 crates' own versions are internal facts.
 
+Two refusals exist because a host cannot derive the answer: `probeNativeSupport`
+asks the loader whether this device has the libraries at all, where `initNative`
+would have to build a sniffer to find out, and `CaptureError.WrongProcess` stops a
+live capture started from a secondary process, where the process-static queue
+hand-off would otherwise leave a tunnel up and nothing delivered.
+
+What the seam does *not* merge into a host is a permission the host should decide
+for itself: `POST_NOTIFICATIONS` (the heads-up it gates is one line of `Config`) and
+`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (whose page has a permission-free fallback).
+`INTERNET` is not that kind of line — the forwarder needs it, so it stays declared,
+and a host that strips it is not running a degraded capture but a disconnected game.
+
 ## Native contracts
 
 Two things are name-level agreements between the Kotlin and native halves, each

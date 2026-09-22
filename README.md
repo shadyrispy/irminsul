@@ -9,7 +9,7 @@ irminsul-android/
 │   ├── rust/irminsul-core/   # 从 konkers/irminsul 裁剪出的 lib crate（good/player_data/keys/build.rs）
 │   ├── rust/irminsul-decode/ # 共享解码核心：pipeline / 缓存 / known bodies / JSON 契约（无 JNI、无 GUI）
 │   ├── rust/irminsul-jni/    # JNI 桥 crate：Java_com_esc_irminsul_capture_internal_NativeLib_* → libirminsul.so
-│   ├── rust/pcap-check/      # 离线回放验证工具（基线 3919 命令 / 0 解析错误）
+│   ├── rust/pcap-check/      # 离线回放验证工具（基线 3919 命令 / 0 解析错误；`--status` 打每包状态，`--good` 打这个会话会交给宿主的 GOOD 导出）
 │   ├── rust/irminsul-viewer/ # 桌面查看器：pcap / 管道 / libpcap 实时 → 本地网页（含自写前端页面）
 │   ├── src/                  # Kotlin：门面 + VPN 服务 + 解码线程
 │   └── testdata/             # summary_status.json：Kotlin/Rust 两端契约夹具
@@ -28,9 +28,10 @@ feature，关掉它仍能回放文件与管道，`--live` 则回答为什么不�
 
 ## 关于 rust/ 的位置
 
-C 代码在 `app/src/main/c/`，因为它由 AGP 的 externalNativeBuild（CMake）构建，必须挂在
-Android 源码集下；Rust 由 cargo 独立构建（gradle 里只有一个 Exec 任务桥接），没有 AGP
-源码集概念，按 cargo-in-gradle 的惯例放在仓库根目录的 `rust/` 下。
+C 代码在 `capture/src/main/c/`，因为它由 `:capture` 的 externalNativeBuild（CMake）构建，
+必须挂在 Android 源码集下；Rust 由 cargo 独立构建（gradle 里只有一个 Exec 任务桥接），没有 AGP
+源码集概念，按 cargo-in-gradle 的惯例放在 `capture/rust/` 下。两者都由 `:capture` 打进 AAR，
+`app/` 与 `capture-sample/` 都只是消费它的宿主。
 
 ## 上游同步
 
