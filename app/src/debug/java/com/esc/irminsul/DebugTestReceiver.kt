@@ -68,6 +68,14 @@ class DebugTestReceiver : BroadcastReceiver() {
                     Log.w(TAG, "REPLAY needs --es path <pcap>")
                     return
                 }
+                // The startup call every host makes and a broadcast process does not:
+                // without the sniffer behind it, a replay opens the file happily and
+                // decodes nothing — which reads, from the outside, like the file was
+                // empty. Say so if it fails.
+                val init = IrminsulCapture.initNative(context)
+                if (init is CaptureResult.Err) {
+                    Log.w(TAG, "native init failed: ${init.error}")
+                }
                 IrminsulCapture.start(context, CaptureSource.File(path), SilentSink)
                 Log.i(TAG, "replaying $path")
             }

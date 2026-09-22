@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use irminsul_decode::{AchievementFormat, ExportSettings, PcapFrames, Session, key_origin_name};
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JLongArray, JString};
-use jni::sys::{jbyteArray, jint, jlong, jlongArray, jstring};
+use jni::sys::{JNI_VERSION_1_6, jbyteArray, jint, jlong, jlongArray, jstring};
 
 // ---------------------------------------------------------------------------
 // Global state
@@ -90,6 +90,31 @@ fn init_sniffer_tracing() {
         let subscriber = tracing_subscriber::registry().with(layer);
         let _ = tracing::subscriber::set_global_default(subscriber);
     });
+}
+
+/// The JVM's own hook, run by `System.loadLibrary` — the first moment a `JavaVM`
+/// exists, and the last moment before any host code has called anything.
+///
+/// Wiring the log bridge here rather than only in `nativeInitLogging` is what keeps
+/// a native line from being dropped on the floor: the bridge needs a `JavaVM` to
+/// call back through and the tracing layer to route a crate's own lines, and both
+/// used to appear only once a host had run its startup call. A process that reached
+/// the library another way — a broadcast that started a pcap replay, say — then
+/// logged nothing at all, including the reason the file could not be opened, which
+/// is exactly what was measured on a device. `init_sniffer_tracing` stays called
+/// from the sniffer's own entry point too; it is a `Once` either way.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn JNI_OnLoad(
+    vm: jni::JavaVM,
+    _reserved: *mut std::ffi::c_void,
+) -> jint {
+    if let Some(mut guard) = lock_java_vm() {
+        if guard.is_none() {
+            *guard = Some(vm);
+        }
+    }
+    init_sniffer_tracing();
+    JNI_VERSION_1_6
 }
 
 /// The logcat tag for a target, or "" when the crate is not bridged.

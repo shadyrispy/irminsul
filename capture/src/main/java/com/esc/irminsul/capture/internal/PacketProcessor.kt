@@ -150,11 +150,14 @@ internal class PacketProcessor(
      * thing in this stack that knows the pcap format, so the Android and desktop
      * halves cannot disagree about it.
      *
-     * @return how many packets were handed to the decoder.
+     * @return how many packets were handed to the decoder, or `null` when the file
+     *   could not be opened at all. "Could not open" and "opened, held nothing" are
+     *   different problems to fix, and a caller that gets `0` for both cannot tell
+     *   which one it has.
      */
-    fun readPcapFile(pcapPath: String): Int {
+    fun readPcapFile(pcapPath: String): Int? {
         val handle = NativeLib.pcapOpen(pcapPath)
-        if (handle < 0) return 0
+        if (handle < 0) return null
 
         val timestamp = LongArray(1)
         var fed = 0

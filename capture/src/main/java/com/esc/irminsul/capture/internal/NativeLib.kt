@@ -192,7 +192,11 @@ internal object NativeLib {
         }
     }
 
-    /** Opens a pcap for replay; -1 when it is not a readable pcap (see `logs`). */
+    /**
+     * Opens a pcap for replay; -1 when it is not a readable pcap, in which case the
+     * native stack has already reported why through the log callback, which reaches
+     * logcat as well as the host's `logs` flow.
+     */
     fun pcapOpen(path: String): Long {
         ensureLibraryLoaded()
         return if (libraryLoaded) nativePcapOpen(path) else -1L

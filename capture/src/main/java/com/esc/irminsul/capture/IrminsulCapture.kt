@@ -93,9 +93,29 @@ object IrminsulCapture {
      */
     val keyOrigin: StateFlow<KeyOrigin?> = CaptureStatus.keyOrigin
 
-    /** Diagnostic lines forwarded from the native stack. No replay. */
+    /** Diagnostic lines, from the native stack and from this module. No replay. */
     private val _logs = MutableSharedFlow<String>(extraBufferCapacity = 256)
+
+    /**
+     * What [logs] carries: a host that was not attached when a line was emitted
+     * never sees it, which is why [log] writes every line to logcat as well.
+     */
     val logs: SharedFlow<String> = _logs.asSharedFlow()
+
+    /**
+     * One line, two listeners.
+     *
+     * [logs] is how a host sees the module, but it keeps nothing for a subscriber
+     * that is not attached: a capture started from a broadcast, or a host that has
+     * gone to the background, would then produce no record anywhere of what the
+     * module decided — which is how a pcap the app cannot open and a pcap with
+     * nothing in it became indistinguishable on a device. So every line also goes
+     * to logcat, where a device-side diagnosis is read anyway.
+     */
+    private fun log(message: String) {
+        Log.i(TAG, message)
+        _logs.tryEmit(message)
+    }
 
     /** Set once, when the native stack first reports all game data collected. */
     private val _completion = MutableStateFlow<Completion?>(null)
@@ -143,9 +163,16 @@ object IrminsulCapture {
 
     init {
         NativeLib.setLogCallback(object : NativeLib.LogCallback {
-            override fun onLog(message: String) {
-                _logs.tryEmit(message)
-            }
+            /**
+             * Native lines go to logcat as well as to [logs].
+             *
+             * [logs] has no replay and keeps nothing for a host that is not
+             * listening, so a capture started from a broadcast — or one whose host
+             * has left the foreground — loses the only record of why a pcap could
+             * not be opened. Measured on a device: two failed replays, and the
+             * reason appeared nowhere.
+             */
+            override fun onLog(message: String) = log(message)
         })
         NativeLib.setDataCompleteCallback(object : NativeLib.DataCompleteCallback {
             override fun onDataComplete(
@@ -327,13 +354,13 @@ object IrminsulCapture {
                 ?.let { am -> installed.forEach { (pkg, _) -> am.killBackgroundProcesses(pkg) } }
         } catch (e: SecurityException) {
             Log.i(TAG, "cannot close the game: declare KILL_BACKGROUND_PROCESSES")
-            _logs.tryEmit("Cannot close the game — add KILL_BACKGROUND_PROCESSES to the host manifest")
+            log("Cannot close the game — add KILL_BACKGROUND_PROCESSES to the host manifest")
         }
         val (pkg, launch) = installed.first()
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return try {
             app.startActivity(launch)
-            _logs.tryEmit("Restarted $pkg to catch its login; expect the opening sequence")
+            log("Restarted $pkg to catch its login; expect the opening sequence")
             CaptureResult.Ok(Unit)
         } catch (e: ActivityNotFoundException) {
             Log.w(TAG, "no launchable activity for $pkg")
@@ -359,7 +386,7 @@ object IrminsulCapture {
         }
         val ms = durationMs.coerceIn(1, 600_000)
         val app = appContext ?: return CaptureResult.Err(CaptureError.NoActiveSession)
-        _logs.tryEmit("Stalling the tunnel ${ms}ms — expect the game to stall and reconnect")
+        log("Stalling the tunnel ${ms}ms — expect the game to stall and reconnect")
         app.startService(
             Intent(app, CaptureService::class.java)
                 .setAction(CaptureService.ACTION_STALL_TUNNEL)
@@ -405,7 +432,7 @@ object IrminsulCapture {
 
                     attempts++
                     lastAttemptAt = now
-                    _logs.tryEmit(
+                    log(
                         "No session key after ${BLIND_GRACE_MS / 1000}s of traffic — " +
                             "restarting the game to catch its login " +
                             "(attempt $attempts/$MAX_AUTO_RELOGIN_ATTEMPTS)"
@@ -519,10 +546,19 @@ object IrminsulCapture {
 
     /** Replays a pcap on a module thread; cancelled by [stop]. */
     private fun replay(path: String) {
-        val worker = processor ?: return
+        val worker = processor
+        if (worker == null) {
+            // `start` always builds the pipeline first, so this is nearly
+            // unreachable — and "nearly" was not enough: a return that said nothing
+            // read exactly like a pcap that held no packets.
+            log("pcap replay did not start: no capture pipeline behind $path")
+            return
+        }
         replayJob = scope.launch(Dispatchers.IO) {
-            val packets = worker.readPcapFile(path)
-            _logs.tryEmit("pcap replay finished: $packets packets from $path")
+            when (val packets = worker.readPcapFile(path)) {
+                null -> log("pcap replay did not start: $path could not be opened")
+                else -> log("pcap replay finished: $packets packets from $path")
+            }
         }
     }
 }
