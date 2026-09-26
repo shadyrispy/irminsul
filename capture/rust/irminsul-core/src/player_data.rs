@@ -240,7 +240,9 @@ impl PlayerData {
             .collect()
     }
 
-    pub fn round(property: Property, value: f32) -> f32 {
+    // f64 throughout: an f32 sum of the roll table (e.g. 5.83+6.56+6.56 for def_%) lands at
+    // 18.949999… and rounds to 18.9, while the game — and the f64 sum, 18.950000…3 — show 19.0.
+    pub fn round(property: Property, value: f64) -> f64 {
         // The game rounds percentages to 0.1 and non percentages to whole numbers.
         if property.is_percentage() {
             (value * 10.).round() / 10.
@@ -276,22 +278,22 @@ impl PlayerData {
                 }
                 let artifact_data = self.game_data.get_artifact(item.item_id).ok()?;
                 let artifact = equip.reliquary();
-                let mut substats: IndexMap<Property, (f32, f32)> = IndexMap::new();
+                let mut substats: IndexMap<Property, (f64, f64)> = IndexMap::new();
                 for substat_id in artifact.append_prop_id_list.iter() {
                     let Some(substat) = self.game_data.get_affix(*substat_id).ok() else {
                         continue;
                     };
                     let entry = substats
                         .entry(substat.property)
-                        .or_insert((0., substat.value as f32));
-                    entry.0 += substat.value as f32;
+                        .or_insert((0., substat.value));
+                    entry.0 += substat.value;
                 }
                 let substats = substats
                     .into_iter()
                     .map(|(property, (value, initial_value))| good::Substat {
                         key: property.good_name().to_string(),
-                        value: Self::round(property, value),
-                        initial_value: Self::round(property, initial_value),
+                        value: Self::round(property, value) as f32,
+                        initial_value: Self::round(property, initial_value) as f32,
                     })
                     .collect();
                 let unactivated_substats = artifact
@@ -301,8 +303,8 @@ impl PlayerData {
                         let substat = self.game_data.get_affix(*substat_id).ok()?;
                         Some(good::Substat {
                             key: substat.property.good_name().to_string(),
-                            value: Self::round(substat.property, substat.value as f32),
-                            initial_value: Self::round(substat.property, substat.value as f32),
+                            value: Self::round(substat.property, substat.value) as f32,
+                            initial_value: Self::round(substat.property, substat.value) as f32,
                         })
                     })
                     .collect();
