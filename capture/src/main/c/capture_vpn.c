@@ -87,6 +87,22 @@ static int is_known_dns_ip(const zdtun_5tuple_t *tuple) {
     return 0;
 }
 
+/**
+ * Every upcall needs this: calling *any* JNI function with an exception pending is
+ * undefined behaviour, and this bridge has already died once that way — a Java
+ * callback threw, nothing cleared it, the next call SIGABRTed the process (the
+ * same shape as the log-bridge crash fixed in 88f6387).
+ *
+ * @return 1 = the call did not actually land.
+ */
+static int clear_pending_exception(JNIEnv *env, const char *where) {
+    if (!(*env)->ExceptionCheck(env)) return 0;
+    (*env)->ExceptionDescribe(env);
+    (*env)->ExceptionClear(env);
+    log_info("cleared a pending Java exception after %s — that call did not land", where);
+    return 1;
+}
+
 static void notify_packet_to_java(capture_ctx_t *ctx, const char *data, int len) {
     JNIEnv *env = ctx->jni_env;
     if (!env || !ctx->on_packet_mid || !ctx->capture_service) return;
@@ -95,6 +111,7 @@ static void notify_packet_to_java(capture_ctx_t *ctx, const char *data, int len)
     if (arr) {
         (*env)->SetByteArrayRegion(env, arr, 0, len, (const jbyte *)data);
         (*env)->CallVoidMethod(env, ctx->capture_service, ctx->on_packet_mid, arr);
+        clear_pending_exception(env, "onPacketCaptured");
         (*env)->DeleteLocalRef(env, arr);
     }
 }
@@ -106,13 +123,17 @@ static void notify_stats_to_java(capture_ctx_t *ctx) {
     (*env)->CallVoidMethod(env, ctx->capture_service, ctx->on_stats_mid,
                            (jlong)ctx->bytes_sent, (jlong)ctx->bytes_received,
                            (jint)ctx->num_connections);
+    clear_pending_exception(env, "onStatsUpdated");
 }
 
 static int protect_socket_via_java(capture_ctx_t *ctx, int sock_fd) {
     JNIEnv *env = ctx->jni_env;
     if (!env || !ctx->protect_socket_mid || !ctx->capture_service) return 0;
 
-    return (*env)->CallBooleanMethod(env, ctx->capture_service, ctx->protect_socket_mid, sock_fd);
+    jboolean ok = (*env)->CallBooleanMethod(env, ctx->capture_service,
+                                            ctx->protect_socket_mid, sock_fd);
+    if (clear_pending_exception(env, "protectSocket")) return 0;
+    return ok ? 1 : 0;
 }
 
 static int is_virtual_dns4(capture_ctx_t *ctx, const zdtun_5tuple_t *tuple) {

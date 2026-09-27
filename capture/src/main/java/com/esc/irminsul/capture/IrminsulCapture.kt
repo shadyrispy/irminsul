@@ -14,6 +14,7 @@ import com.esc.irminsul.capture.internal.CaptureStatus
 import com.esc.irminsul.capture.internal.NativeLib
 import com.esc.irminsul.capture.internal.PacketProcessor
 import com.esc.irminsul.capture.internal.PacketRingBuffer
+import com.esc.irminsul.capture.internal.PcapReplay
 import com.esc.irminsul.capture.internal.PermissionHelper
 import com.esc.irminsul.capture.internal.RawPacket
 import java.io.File
@@ -163,6 +164,13 @@ object IrminsulCapture {
     private var replayJob: Job? = null
     private var autoReloginJob: Job? = null
     private val _replayFinished = MutableStateFlow(true)
+    /**
+     * Why the last [CaptureSource.File] replay did **not** reach the end of the
+     * file, or null when it did. `replayFinished` alone cannot carry this: it also
+     * means "no replay is in flight", so a host must never have to guess whether a
+     * `true` came from a whole file or a broken one.
+     */
+    private val _replayError = MutableStateFlow<String?>(null)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     init {
@@ -508,8 +516,16 @@ object IrminsulCapture {
         val wasReplaying = replayJob != null
         replayJob?.cancel()
         replayJob = null
-        // A cancelled replay is still "over" as far as a waiting host is concerned.
-        if (wasReplaying) _replayFinished.value = true
+        // A cancelled replay is still "over" as far as a waiting host is concerned —
+        // but "over" is not "the whole file was fed". Saying only the first is what
+        // let a toggle mid-replay read as completion, and the host then exported a
+        // truncated inventory as if it were the full one.
+        if (wasReplaying) {
+            if (_replayError.value == null) {
+                _replayError.value = "被打断：停止时回放还没跑到文件末尾"
+            }
+            _replayFinished.value = true
+        }
         autoReloginJob?.cancel()
         autoReloginJob = null
         if (activeSource is CaptureSource.Vpn || isCapturing.value) {
@@ -608,11 +624,28 @@ object IrminsulCapture {
             return
         }
         _replayFinished.value = false
+        _replayError.value = null
         replayJob = scope.launch(Dispatchers.IO) {
             try {
-                when (val packets = worker.readPcapFile(path)) {
-                    null -> log("pcap replay did not start: $path could not be opened")
-                    else -> log("pcap replay finished: $packets packets from $path")
+                val read = worker.readPcapFile(path)
+                when (read.status) {
+                    PcapReplay.Ended -> log("pcap replay ended: ${read.fed} packets from $path")
+                    PcapReplay.Broken -> {
+                        _replayError.value = "读坏了：只喂进 ${read.fed} 帧就停了，文件后面的没解到"
+                        log("pcap replay BROKE in $path after ${read.fed} packets（原因见上面的 native WARN）")
+                    }
+                    PcapReplay.BadHandle -> {
+                        _replayError.value = "句柄失效：只喂进 ${read.fed} 帧"
+                        log("pcap replay lost its handle on $path after ${read.fed} packets")
+                    }
+                    PcapReplay.OpenFailed -> {
+                        _replayError.value = "打不开：$path"
+                        log("pcap replay did not start: $path could not be opened")
+                    }
+                    PcapReplay.Cancelled -> {
+                        _replayError.value = "被打断：喂进 ${read.fed} 帧后停止"
+                        log("pcap replay cancelled in $path after ${read.fed} packets")
+                    }
                 }
             } finally {
                 // Reached on the failure paths too: a host waiting for the replay
@@ -634,4 +667,7 @@ object IrminsulCapture {
      * export early is how a host gets an inventory missing its last category.
      */
     val replayFinished: StateFlow<Boolean> = _replayFinished.asStateFlow()
+
+    /** 非 null = 上一轮回放没跑到文件末尾的原因。见 [_replayError]。 */
+    val replayError: StateFlow<String?> = _replayError.asStateFlow()
 }

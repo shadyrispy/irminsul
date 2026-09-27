@@ -155,26 +155,59 @@ internal class PacketProcessor(
      *   different problems to fix, and a caller that gets `0` for both cannot tell
      *   which one it has.
      */
-    fun readPcapFile(pcapPath: String): Int? {
+    /**
+     * Feed every frame of [pcapPath] into the live queue.
+     *
+     * The status is the point of returning more than a count: "reached the end of
+     * the file", "a record could not be read", "the handle went bad" and "the host
+     * stopped us" all used to end this loop the same way, so a host that exports on
+     * completion could not tell a whole inventory from a truncated one — and
+     * `GoodRepository`-style single-file storage makes that swap silent.
+     */
+    fun readPcapFile(pcapPath: String): PcapRead {
         val handle = NativeLib.pcapOpen(pcapPath)
-        if (handle < 0) return null
+        if (handle < 0) return PcapRead(PcapReplay.OpenFailed, 0)
 
-        val timestamp = LongArray(1)
+        // [0] = the frame's own timestamp, [1] = why native returned no frame.
+        val stamped = LongArray(2)
         var fed = 0
+        var status = PcapReplay.Ended
         try {
             while (running) {
-                val frame = NativeLib.pcapNext(handle, timestamp) ?: break
+                val frame = NativeLib.pcapNext(handle, stamped)
+                if (frame == null) {
+                    status = when (stamped[1]) {
+                        2L -> PcapReplay.Broken
+                        3L -> PcapReplay.BadHandle
+                        else -> PcapReplay.Ended
+                    }
+                    break
+                }
                 // Block until space is available instead of silently dropping
                 // packets, so a complete PCAP import never loses data.
-                packetQueue.put(RawPacket(frame, timestamp[0]))
+                packetQueue.put(RawPacket(frame, stamped[0]))
                 fed++
             }
+            if (status == PcapReplay.Ended && !running) status = PcapReplay.Cancelled
         } catch (e: InterruptedException) {
-            // A cancelled replay is a normal end of session, not an error.
+            // A cancelled replay is a known way to not reach the end, not success.
+            status = PcapReplay.Cancelled
             currentThread().interrupt()
         } finally {
             NativeLib.pcapClose(handle)
         }
-        return fed
+        return PcapRead(status, fed)
     }
 }
+
+/** How a pcap replay left the read loop. Only [Ended] means "the whole file was fed". */
+enum class PcapReplay {
+    Ended,
+    Broken,
+    BadHandle,
+    OpenFailed,
+    Cancelled,
+}
+
+/** [PcapReplay] plus the number of frames handed to the queue. */
+data class PcapRead(val status: PcapReplay, val fed: Int)

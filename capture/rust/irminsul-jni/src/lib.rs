@@ -478,10 +478,15 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
     }
 }
 
-/// The next frame, or null at the end of the file (or after a read error, which
-/// is logged). `timestamp_out[0]` receives the file's own timestamp for the frame
-/// in milliseconds, so a replay keeps the capture's clock instead of the wall
-/// clock it is replayed on.
+/// The next frame, or null when the pull did not yield one. `timestamp_out` is a
+/// two-slot array: `[0]` receives the file's own timestamp for the frame in
+/// milliseconds (so a replay keeps the capture's clock instead of the wall clock
+/// it is replayed on), and `[1]` says **why** there is no frame — 1 = the file
+/// ended cleanly, 2 = a record could not be read, 3 = unknown handle.
+///
+/// The status has to cross the boundary: with only null to look at, "the replay
+/// finished" and "the replay broke halfway" are the same event to the host, and a
+/// host that keys its export off completion will happily store the truncated half.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_nativePcapNext(
     env: JNIEnv,
@@ -489,6 +494,15 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
     handle: jlong,
     timestamp_out: jlongArray,
 ) -> jbyteArray {
+    fn mark(env: &JNIEnv, out: &JLongArray, code: i64) {
+        if let Err(e) = env.set_long_array_region(out, 1, &[code]) {
+            log_to_android(
+                "ERROR",
+                &format!("cannot report pcap end status {code}: {e}"),
+            );
+        }
+    }
+
     /// What one pull from the reader produced. Naming "the file ended" separately
     /// matters: without it a completed replay and a bad handle look identical, and
     /// the message written for the wrong one sends whoever is debugging somewhere
@@ -513,23 +527,29 @@ pub unsafe extern "system" fn Java_com_esc_irminsul_capture_internal_NativeLib_n
         }
     });
 
+    let out = unsafe { JLongArray::from_raw(timestamp_out) };
+
     let (bytes, timestamp_ms) = match pulled {
         Pulled::Frame(bytes, timestamp_ms) => (bytes, timestamp_ms),
-        Pulled::Ended => return std::ptr::null_mut(),
-        // A short read ends the replay rather than failing it: the file gave what
-        // it had, and the reason belongs on the log stream the host watches.
+        Pulled::Ended => {
+            mark(&env, &out, 1);
+            return std::ptr::null_mut();
+        }
+        // A broken record is *not* the end of the file: everything after it is
+        // missing, so the host must be able to tell this apart from `Ended`.
         Pulled::Stopped(reason) => {
             log_to_android("WARN", &format!("pcap replay stopped: {}", reason));
+            mark(&env, &out, 2);
             return std::ptr::null_mut();
         }
         Pulled::UnknownHandle => {
             log_to_android("ERROR", &format!("unknown pcap handle {}", handle));
+            mark(&env, &out, 3);
             return std::ptr::null_mut();
         }
     };
 
-    let out = unsafe { JLongArray::from_raw(timestamp_out) };
-    if let Err(e) = env.set_long_array_region(&out, 0, &[timestamp_ms as jlong]) {
+    if let Err(e) = env.set_long_array_region(&out, 0, &[timestamp_ms as jlong, 0]) {
         log_to_android("ERROR", &format!("cannot report pcap timestamp: {}", e));
         return std::ptr::null_mut();
     }
@@ -661,7 +681,7 @@ fn notify_data_complete(
     achievement_count: usize,
 ) {
     if let Ok(class) = env.find_class("com/esc/irminsul/capture/internal/NativeLib") {
-        let _ = env.call_static_method(
+        let called = env.call_static_method(
             class,
             "onDataComplete",
             "(IIIII)V",
@@ -673,6 +693,17 @@ fn notify_data_complete(
                 (achievement_count as jint).into(),
             ],
         );
+        // An error here used to be dropped with `let _ =`, which leaves whatever the
+        // callback threw pending on this `env` — and the next JNI call on it is
+        // undefined behaviour. This same shape aborted the process once already
+        // ("JNI called with pending exception"), on the log bridge fixed in 88f6387.
+        if let Err(e) = called {
+            log_to_android("ERROR", &format!("onDataComplete callback failed: {}", e));
+            if matches!(env.exception_check(), Ok(true)) {
+                env.exception_describe();
+                let _ = env.exception_clear();
+            }
+        }
     }
 }
 
