@@ -242,12 +242,16 @@ impl PlayerData {
 
     // f64 throughout: an f32 sum of the roll table (e.g. 5.83+6.56+6.56 for def_%) lands at
     // 18.949999… and rounds to 18.9, while the game — and the f64 sum, 18.950000…3 — show 19.0.
+    // The epsilon is what makes the tie itself stable: 18.52+20.83+23.15 is exactly 62.5 in three
+    // append orders and 62.49999999999999 in the other three, and `.round()` reports those as 63
+    // and 62 — so one artifact's export depended on the order its rolls happened to arrive in.
+    // Tiers carry at most two decimals, so a genuine value never sits nearer than 0.01 to a tie.
     pub fn round(property: Property, value: f64) -> f64 {
-        // The game rounds percentages to 0.1 and non percentages to whole numbers.
+        // The game rounds percentages to 0.1 and non percentages to whole numbers, ties upward.
         if property.is_percentage() {
-            (value * 10.).round() / 10.
+            ((value * 10.) + 0.5 + 1e-9).floor() / 10.
         } else {
-            value.round()
+            (value + 0.5 + 1e-9).floor()
         }
     }
 
@@ -411,5 +415,28 @@ impl PlayerData {
                 Some((good::to_good_key(name), material.count))
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tie_rounds_up_whichever_order_the_rolls_arrived_in() {
+        // A real 5★ def spread: three of its six append orders land exactly on the .5 tie and
+        // three land a ulp below, which `f64::round` reported as 63 and 62 for the same artifact.
+        let below = 18.52 + 20.83 + 23.15;
+        let on = 18.52 + 23.15 + 20.83;
+        assert_ne!(below, on);
+        assert_eq!(PlayerData::round(Property::Defense, below), 63.);
+        assert_eq!(PlayerData::round(Property::Defense, on), 63.);
+    }
+
+    #[test]
+    fn epsilon_does_not_bump_a_genuine_below_tie() {
+        assert_eq!(PlayerData::round(Property::Defense, 20.83 + 20.83 + 20.83), 62.);
+        assert_eq!(PlayerData::round(Property::CritDamage, 28.75), 28.8);
+        assert_eq!(PlayerData::round(Property::CritDamage, 28.74), 28.7);
     }
 }
