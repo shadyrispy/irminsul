@@ -18,3 +18,7 @@ capture/rust/pcap-check/target/
 capture-sample/build/
 capture/rust/irminsul-decode/target/
 capture/rust/irminsul-viewer/target/
+
+# Local scratch: the coordinate-probing script and its notes, kept in the tree
+# but out of the library history.
+coords/
