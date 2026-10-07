@@ -122,7 +122,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "auto-artifactarium"
 version = "1.4.0"
-source = "git+https://github.com/shadyrispy/auto-artifactarium.git?branch=feat%2Fheuristic-matching#1445848a7e5d66cbfa310cb30a9a218a08411ffb"
+source = "git+https://github.com/shadyrispy/auto-artifactarium.git?branch=feat%2Fheuristic-matching#be11d9195e5c9c001945e258d3cd0d963fe8331d"
 dependencies = [
  "anyhow",
  "base64",
