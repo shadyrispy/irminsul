@@ -116,6 +116,13 @@ impl PlayerData {
     }
 
     pub fn process_characters(&mut self, avatars: &[AvatarInfo]) {
+        // The login push is the only complete roster; every later notify carries a
+        // subset of it (one changed avatar, a team change). Replacing on those
+        // would shrink the roster to whatever arrived last, so only a batch at
+        // least as large as the current one is taken.
+        if avatars.len() < self.characters.len() {
+            return;
+        }
         self.character_equip_guid_map.clear();
         for avatar in avatars {
             for guid in &avatar.equip_guid_list {
@@ -438,5 +445,16 @@ mod tests {
         assert_eq!(PlayerData::round(Property::Defense, 20.83 + 20.83 + 20.83), 62.);
         assert_eq!(PlayerData::round(Property::CritDamage, 28.75), 28.8);
         assert_eq!(PlayerData::round(Property::CritDamage, 28.74), 28.7);
+    }
+
+    #[test]
+    fn a_smaller_later_avatar_batch_does_not_shrink_the_roster() {
+        let avatar = |id: u32, guid: u64| AvatarInfo { avatar_id: id, guid, ..Default::default() };
+        let mut data = PlayerData::new(AnimeGameData::new());
+
+        data.process_characters(&[avatar(100000021, 7), avatar(10000005, 8)]);
+        data.process_characters(&[avatar(100000021, 7)]);
+
+        assert_eq!(data.character_count(), 2);
     }
 }
