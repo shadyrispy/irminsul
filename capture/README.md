@@ -32,7 +32,7 @@ published artifact rather than the source project — the one claim a host's
 ## Integrate
 
 ```kotlin
-dependencies { implementation("com.esc.irminsul:capture:1.10.0") }   // = captureVersion
+dependencies { implementation("com.esc.irminsul:capture:1.11.0") }   // = captureVersion
 ```
 
 The public interface is the `com.esc.irminsul.capture` package; everything else
