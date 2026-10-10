@@ -78,7 +78,7 @@ IrminsulCapture.exportKnownBodies(destDir)                   // the samples, whe
 
 `exportGood(settingsJson)` returns `{format:"GOOD", version:3, source:"Irminsul",
 characters, artifacts, weapons, materials}` with **camelCase** keys (`setKey`,
-`slotKey`, `mainStatKey`, `substats[{key,value,initialValue}]`, `location`, `lock`,
+`slotKey`, `mainStatKey`, `substats[{key,value,initialValue,rolls}]`, `location`, `lock`,
 `totalRolls`, `astralMark`, `elixerCrafted`, `unactivatedSubstats`), which is the
 shape a host keys its own plans off. `settingsJson` filters it
 (`include_*`, `min_artifact_rarity`, `fake_initialize_4th_line`, …); a partial object is
@@ -88,7 +88,14 @@ that only accepts 4★/5★ has to ask for that here rather than filter after th
 Two fields are ours rather than GOOD's, both because a host would otherwise
 re-derive them from a name table: `weapons[].rarity` (the star count the export
 already filtered on) and `characters[].element` (read off the burst, so null for a
-character whose burst was never sent). What is **not** in the export, because the
+character whose burst was never sent). `substats[].rolls` is a GOODScanner
+extension rather than GOOD's: it carries the game's individual upgrade values, which
+is what an optimizer needs to score a line's future potential — the summed `value`
+alone cannot say whether it came from one big roll or several small ones. Like the
+`totalRolls` / `astralMark` / `elixerCrafted` fields above, it is additive and a host
+that ignores it sees the shape it always did. The rolls are the game's own numbers,
+unrounded, so their sum can sit one rounding step off the rounded `value`. What is
+**not** in the export, because the
 packets do not carry it: an artifact's favourite flag, a character's fame, and a
 talent's grey-lock state; and no main-stat *value*, which needs a level table the
 embedded game data does not hold. `pcap-check --good <capture.pcap>` prints this

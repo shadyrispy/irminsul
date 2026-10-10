@@ -289,22 +289,26 @@ impl PlayerData {
                 }
                 let artifact_data = self.game_data.get_artifact(item.item_id).ok()?;
                 let artifact = equip.reliquary();
-                let mut substats: IndexMap<Property, (f64, f64)> = IndexMap::new();
+                let mut substats: IndexMap<Property, Vec<f64>> = IndexMap::new();
                 for substat_id in artifact.append_prop_id_list.iter() {
                     let Some(substat) = self.game_data.get_affix(*substat_id).ok() else {
                         continue;
                     };
-                    let entry = substats
+                    substats
                         .entry(substat.property)
-                        .or_insert((0., substat.value));
-                    entry.0 += substat.value;
+                        .or_default()
+                        .push(substat.value);
                 }
                 let substats = substats
                     .into_iter()
-                    .map(|(property, (value, initial_value))| good::Substat {
+                    .map(|(property, rolls)| good::Substat {
                         key: property.good_name().to_string(),
-                        value: Self::round(property, value) as f32,
-                        initial_value: Self::round(property, initial_value) as f32,
+                        value: Self::round(property, rolls.iter().sum::<f64>()) as f32,
+                        initial_value: Self::round(property, rolls[0]) as f32,
+                        // Rolls stay raw: only the summed `value` is rounded, so
+                        // the entries here are the game's own numbers and their
+                        // sum can differ from `value` by the rounding step.
+                        rolls: rolls.iter().map(|roll| *roll as f32).collect(),
                     })
                     .collect();
                 let unactivated_substats = artifact
@@ -312,10 +316,12 @@ impl PlayerData {
                     .iter()
                     .filter_map(|substat_id| {
                         let substat = self.game_data.get_affix(*substat_id).ok()?;
+                        let value = Self::round(substat.property, substat.value) as f32;
                         Some(good::Substat {
                             key: substat.property.good_name().to_string(),
-                            value: Self::round(substat.property, substat.value) as f32,
-                            initial_value: Self::round(substat.property, substat.value) as f32,
+                            value,
+                            initial_value: value,
+                            rolls: vec![substat.value as f32],
                         })
                     })
                     .collect();

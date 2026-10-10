@@ -8,6 +8,13 @@ pub struct Substat {
     pub key: String,
     pub value: f32,
     pub initial_value: f32,
+    /// The individual upgrade values this line sums, in the order the game applied
+    /// them and unrounded — so the first entry rounds to `initial_value`, and the
+    /// entries can sum to a value one rounding step off the rounded `value`. Kept
+    /// because `value` alone cannot say whether it came from one big roll or
+    /// several small ones, which is what an optimizer scores future potential on.
+    #[serde(default)]
+    pub rolls: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
